@@ -195,7 +195,33 @@ def aplicar_estilo() -> None:
             50%      { box-shadow: 0 0 0 6px rgba(20, 184, 106, 0.0); }
         }
 
+        /* rolagem suave para anchors */
+        html { scroll-behavior: smooth; }
+
         /* ----- STEP CARDS (estilo numerado, título cyan) ----- */
+        .card-link {
+            text-decoration: none !important;
+            color: inherit !important;
+            display: block;
+            height: 100%;
+            cursor: pointer;
+        }
+        .card-link:hover .step-card {
+            border-color: #00E0D4;
+            transform: translateY(-2px);
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
+        }
+        .card-link .step-card::after {
+            content: "↓ abrir";
+            position: absolute;
+            top: 0.6rem; right: 0.8rem;
+            font-size: 0.66rem;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            color: #00E0D4;
+            opacity: 0.55;
+            letter-spacing: 0.06em;
+        }
+        .card-link:hover .step-card::after { opacity: 1; }
         .step-card {
             position: relative;
             background: #0F1B33;
@@ -455,18 +481,21 @@ ICONE_IMPACTO = (
 def cards_explicativos() -> None:
     etapas = [
         ("1", "📁", "Carregar base",
-         "Importe CSV, XLSX, KML ou KMZ com as OAEs."),
+         "Importe CSV, XLSX, KML ou KMZ com as OAEs.",
+         "planilha-dados"),
         ("2", "🗺️", "Visualizar mapa",
-         "Veja a criticidade no mapa interativo."),
+         "Veja a criticidade no mapa interativo.",
+         None),
         ("3", "⛔", "Selecionar interdição",
-         "Escolha uma ou mais OAEs para fechar."),
+         "Escolha uma ou mais OAEs para fechar.",
+         None),
         ("4", "📊", "Calcular impacto",
-         "Compare rotas e variação de distância."),
+         "Compare rotas e variação de distância.",
+         None),
     ]
     cols = st.columns(len(etapas), gap="small")
-    for col, (num, emoji, titulo, texto) in zip(cols, etapas):
-        col.markdown(
-            f"""
+    for col, (num, emoji, titulo, texto, anchor) in zip(cols, etapas):
+        card_html = f"""
             <div class="step-card">
                 <div class="title">
                     <span class="emoji">{emoji}</span>
@@ -474,9 +503,12 @@ def cards_explicativos() -> None:
                 </div>
                 <p>{texto}</p>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        """
+        if anchor:
+            html = f'<a href="#{anchor}" class="card-link">{card_html}</a>'
+        else:
+            html = card_html
+        col.markdown(html, unsafe_allow_html=True)
 
 
 # ----------------------------------------------------------------------------
@@ -1308,9 +1340,15 @@ def main() -> None:
     mapa_geral = desenhar_mapa(df, titulo=None)
     st_folium(mapa_geral, width=None, height=520, returned_objects=[])
 
-    with st.expander("Ver tabela de OAEs"):
-        cols_show = [c for c in COLUNAS_OBRIGATORIAS + COLUNAS_OPCIONAIS if c in df.columns]
-        st.dataframe(df[cols_show], use_container_width=True, hide_index=True)
+    # Âncora alvo do card "1. Carregar base"
+    st.markdown('<div id="planilha-dados"></div>', unsafe_allow_html=True)
+    st.markdown("### 📋 Planilha de dados das OAEs")
+    st.caption(
+        f"Dados que estão sendo usados na simulação — {len(df)} OAEs carregadas. "
+        f"Confira aqui se a base bate com o que você espera antes de rodar o cenário."
+    )
+    cols_show = [c for c in COLUNAS_OBRIGATORIAS + COLUNAS_OPCIONAIS if c in df.columns]
+    st.dataframe(df[cols_show], use_container_width=True, hide_index=True, height=300)
 
     # Simulação
     st.markdown("---")
