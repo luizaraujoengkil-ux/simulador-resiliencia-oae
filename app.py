@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from folium.features import DivIcon
+from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
 
 # ----------------------------------------------------------------------------
@@ -484,8 +485,8 @@ def cards_explicativos() -> None:
          "Importe CSV, XLSX, KML ou KMZ com as OAEs.",
          "planilha-dados"),
         ("2", "🗺️", "Visualizar mapa",
-         "Veja a criticidade no mapa interativo.",
-         None),
+         "Veja a criticidade no mapa interativo (botão ⛶ abre em tela cheia).",
+         "mapa-criticidade"),
         ("3", "⛔", "Selecionar interdição",
          "Escolha uma ou mais OAEs para fechar.",
          None),
@@ -752,6 +753,14 @@ def desenhar_mapa(
     centro_lat = float(df["Latitude"].mean())
     centro_lon = float(df["Longitude"].mean())
     m = folium.Map(location=[centro_lat, centro_lon], zoom_start=11, control_scale=True, tiles="cartodbpositron")
+
+    # Botão de tela cheia (canto superior direito)
+    Fullscreen(
+        position="topright",
+        title="Expandir para tela cheia",
+        title_cancel="Sair da tela cheia",
+        force_separate_button=True,
+    ).add_to(m)
 
     if titulo:
         folium.map.Marker(
@@ -1335,8 +1344,13 @@ def main() -> None:
         )
         return
 
-    # Mapa geral
+    # Mapa geral — alvo do card "2. Visualizar mapa"
+    st.markdown('<div id="mapa-criticidade"></div>', unsafe_allow_html=True)
     st.markdown("### 📍 Mapa geral de criticidade")
+    st.caption(
+        "Clique no botão **⛶** no canto superior direito do mapa para expandir em tela cheia. "
+        "Use **Esc** ou clique no botão novamente para voltar."
+    )
     mapa_geral = desenhar_mapa(df, titulo=None)
     st_folium(mapa_geral, width=None, height=520, returned_objects=[])
 
