@@ -84,57 +84,67 @@ def aplicar_estilo() -> None:
     st.markdown(
         """
         <style>
-        /* ----- Container principal: paddings menores e largura limitada ----- */
+        /* ----- Container principal ----- */
         .block-container {
-            padding-top: 1rem !important;
-            padding-bottom: 2rem !important;
-            padding-left: 1.6rem !important;
-            padding-right: 1.6rem !important;
-            max-width: 1400px;
+            padding-top: 1.2rem !important;
+            padding-bottom: 2.5rem !important;
+            padding-left: 2rem !important;
+            padding-right: 2rem !important;
+            max-width: 1500px;
         }
 
-        /* ----- Tipografia geral menor para markdown ----- */
-        .stMarkdown h1 { font-size: 1.45rem; font-weight: 700; margin: 0.4rem 0 0.5rem; }
-        .stMarkdown h2 { font-size: 1.2rem;  font-weight: 700; margin: 0.4rem 0 0.45rem; }
-        .stMarkdown h3 { font-size: 1.02rem; font-weight: 600; margin: 0.6rem 0 0.4rem; }
-        .stMarkdown p, .stMarkdown li { font-size: 0.92rem; }
+        /* ----- Tipografia geral ----- */
+        .stMarkdown h1 { font-size: 1.5rem;  font-weight: 700; margin: 0.5rem 0 0.6rem; color: #F5F8FF; }
+        .stMarkdown h2 { font-size: 1.25rem; font-weight: 700; margin: 0.5rem 0 0.5rem; color: #F5F8FF; }
+        .stMarkdown h3 { font-size: 1.08rem; font-weight: 600; margin: 0.9rem 0 0.5rem; color: #F5F8FF; }
+        .stMarkdown p, .stMarkdown li { font-size: 0.94rem; color: #C8D2E6; }
 
-        /* ----- Hero técnico (estilo painel de engenharia) ----- */
+        /* ----- HERO ----- */
         .app-hero {
-            background: #0E1A2F;
-            border: 1px solid #1E2C45;
-            border-top: 2px solid #00E0D4;
-            padding: 0.7rem 1rem;
-            border-radius: 3px;
-            color: #FFFFFF;
-            margin-bottom: 0.7rem;
+            position: relative;
+            background:
+                radial-gradient(1200px 240px at 0% 0%, rgba(0, 224, 212, 0.08), transparent 60%),
+                linear-gradient(180deg, #112241 0%, #0C1830 100%);
+            border: 1px solid #1F2D4A;
+            border-radius: 10px;
+            padding: 1.1rem 1.4rem;
+            margin-bottom: 1rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 1rem;
+            gap: 1.5rem;
+            color: #F5F8FF;
+        }
+        .app-hero::before {
+            content: "";
+            position: absolute;
+            left: 0; top: 12%; bottom: 12%;
+            width: 3px;
+            background: linear-gradient(180deg, #00E0D4, #6FA8FF);
+            border-radius: 0 2px 2px 0;
         }
         .app-hero .brand {
             display: flex;
             align-items: center;
-            gap: 0.7rem;
+            gap: 0.9rem;
             min-width: 0;
         }
         .app-hero .mark {
-            width: 32px;
-            height: 32px;
+            width: 44px;
+            height: 44px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border: 1px solid rgba(0, 224, 212, 0.5);
-            background: rgba(0, 224, 212, 0.08);
-            border-radius: 3px;
+            background: rgba(0, 224, 212, 0.09);
+            border: 1px solid rgba(0, 224, 212, 0.4);
+            border-radius: 8px;
             flex-shrink: 0;
         }
         .app-hero .mark svg {
-            width: 18px;
-            height: 18px;
+            width: 24px;
+            height: 24px;
             stroke: #00E0D4;
-            stroke-width: 1.8;
+            stroke-width: 1.7;
             fill: none;
             stroke-linecap: round;
             stroke-linejoin: round;
@@ -146,125 +156,125 @@ def aplicar_estilo() -> None:
         }
         .app-hero h1 {
             margin: 0;
-            font-size: 1rem;
+            font-size: 1.55rem;
             font-weight: 700;
             line-height: 1.15;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
             color: #FFFFFF;
+            letter-spacing: -0.01em;
         }
         .app-hero .subtitle {
-            margin: 0.15rem 0 0;
-            font-size: 0.74rem;
-            color: #8FA0BA;
-            letter-spacing: 0.02em;
+            margin: 0.2rem 0 0;
+            font-size: 0.95rem;
+            color: #A8B5CC;
+            font-weight: 400;
         }
         .app-hero .meta {
             display: flex;
-            gap: 0.4rem;
+            gap: 0.5rem;
             align-items: center;
-            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
-            font-size: 0.66rem;
-            color: #8FA0BA;
             flex-shrink: 0;
         }
         .app-hero .pill {
-            background: rgba(0, 224, 212, 0.1);
-            border: 1px solid rgba(0, 224, 212, 0.4);
+            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
+            font-size: 0.7rem;
+            background: rgba(0, 224, 212, 0.12);
+            border: 1px solid rgba(0, 224, 212, 0.45);
             color: #00E0D4;
-            padding: 0.18rem 0.5rem;
-            border-radius: 2px;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
+            padding: 0.3rem 0.6rem;
+            border-radius: 4px;
+            letter-spacing: 0.06em;
             font-weight: 700;
         }
-        .app-hero .pill.muted {
-            background: rgba(143, 160, 186, 0.08);
-            border-color: rgba(143, 160, 186, 0.35);
-            color: #8FA0BA;
+        .app-hero .pill.status {
+            background: rgba(74, 222, 128, 0.1);
+            border-color: rgba(74, 222, 128, 0.4);
+            color: #4ADE80;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
         }
-        .app-hero .dot {
-            width: 7px;
-            height: 7px;
+        .app-hero .pill.status .dot {
+            width: 6px;
+            height: 6px;
             border-radius: 50%;
-            background: #16C172;
-            box-shadow: 0 0 0 2px rgba(22, 193, 114, 0.18);
+            background: #4ADE80;
+            box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
         }
 
-        /* ----- Step cards estilo "pipeline" técnico ----- */
+        /* ----- STEP CARDS ----- */
         .step-card {
-            background: #0E1A2F;
-            border: 1px solid #1E2C45;
-            border-left: 2px solid #00E0D4;
-            border-radius: 3px;
-            padding: 0.6rem 0.8rem;
-            height: 100%;
-            transition: border-color 0.15s ease, background 0.15s ease;
             position: relative;
+            background: linear-gradient(180deg, #0F1B33 0%, #0C1730 100%);
+            border: 1px solid #1F2D4A;
+            border-radius: 10px;
+            padding: 1rem 1.1rem 1.05rem;
+            height: 100%;
+            transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+            overflow: hidden;
+        }
+        .step-card::after {
+            content: "";
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 3px;
+            background: linear-gradient(180deg, #00E0D4, transparent);
+            opacity: 0.85;
         }
         .step-card:hover {
+            transform: translateY(-2px);
             border-color: #2A3B5C;
-            border-left-color: #00E0D4;
-            background: #11203A;
-        }
-        .step-card .step-label {
-            display: flex;
-            align-items: center;
-            gap: 0.35rem;
-            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
-            font-size: 0.62rem;
-            color: #8FA0BA;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-            margin-bottom: 0.35rem;
-        }
-        .step-card .step-label .num {
-            color: #00E0D4;
-            font-weight: 700;
-        }
-        .step-card .step-label .sep {
-            color: #2A3B5C;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
         }
         .step-card .head {
             display: flex;
             align-items: center;
-            gap: 0.45rem;
-            margin-bottom: 0.3rem;
+            justify-content: space-between;
+            gap: 0.6rem;
+            margin-bottom: 0.7rem;
+        }
+        .step-card .step-chip {
+            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
+            font-size: 0.66rem;
+            font-weight: 700;
+            color: #00E0D4;
+            background: rgba(0, 224, 212, 0.1);
+            border: 1px solid rgba(0, 224, 212, 0.32);
+            padding: 0.18rem 0.45rem;
+            border-radius: 4px;
+            letter-spacing: 0.06em;
         }
         .step-card .icon {
             flex-shrink: 0;
-            width: 22px;
-            height: 22px;
+            width: 36px;
+            height: 36px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border-radius: 3px;
-            background: rgba(0, 224, 212, 0.1);
-            border: 1px solid rgba(0, 224, 212, 0.32);
+            background: rgba(0, 224, 212, 0.08);
+            border: 1px solid rgba(0, 224, 212, 0.28);
+            border-radius: 8px;
         }
         .step-card .icon svg {
-            width: 13px;
-            height: 13px;
+            width: 18px;
+            height: 18px;
             stroke: #00E0D4;
-            stroke-width: 1.8;
+            stroke-width: 1.7;
             fill: none;
             stroke-linecap: round;
             stroke-linejoin: round;
         }
         .step-card .title {
-            margin: 0;
-            font-size: 0.78rem;
+            margin: 0 0 0.35rem;
+            font-size: 1rem;
             font-weight: 700;
             color: #FFFFFF;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            line-height: 1.2;
+            line-height: 1.25;
         }
         .step-card p {
             margin: 0;
-            font-size: 0.76rem;
-            color: #B0BCD0;
-            line-height: 1.4;
+            font-size: 0.86rem;
+            color: #A8B5CC;
+            line-height: 1.45;
         }
 
         /* ----- Métricas ----- */
@@ -305,15 +315,25 @@ def aplicar_estilo() -> None:
             color: #07111F;
         }
 
-        /* ----- Sidebar mais enxuta ----- */
+        /* ----- Sidebar ----- */
+        section[data-testid="stSidebar"] {
+            min-width: 340px !important;
+            width: 340px !important;
+        }
         section[data-testid="stSidebar"] .block-container {
-            padding-top: 1rem !important;
+            padding-top: 1.2rem !important;
+            padding-left: 1.1rem !important;
+            padding-right: 1.1rem !important;
         }
         section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2 { font-size: 1rem; margin-bottom: 0.45rem; }
-        section[data-testid="stSidebar"] h3 { font-size: 0.9rem; margin: 0.6rem 0 0.3rem; }
+        section[data-testid="stSidebar"] h2 { font-size: 1.05rem; margin-bottom: 0.5rem; }
+        section[data-testid="stSidebar"] h3 { font-size: 0.92rem; margin: 0.75rem 0 0.3rem; color: #C8D2E6; }
         section[data-testid="stSidebar"] .stMarkdown p,
-        section[data-testid="stSidebar"] label { font-size: 0.84rem; }
+        section[data-testid="stSidebar"] label { font-size: 0.86rem; }
+        /* uploader hint nao trunca */
+        section[data-testid="stSidebar"] [data-testid="stFileUploaderDropzoneInstructions"] small {
+            white-space: normal !important;
+        }
 
         /* ----- Espaçamento entre blocos um pouco menor ----- */
         [data-testid="stVerticalBlock"] { gap: 0.5rem; }
@@ -334,11 +354,16 @@ APP_MODULO = "OAE-SIM"
 
 
 def cabecalho() -> None:
+    # Pequeno glifo de "rede viária": uma ponte estilizada com pilares
     mark_svg = (
         '<svg viewBox="0 0 24 24" aria-hidden="true">'
-        '<path d="M4 20 L12 4 L20 20"/>'
-        '<path d="M8 13 L12 13"/>'
-        '<path d="M10 17 L14 17"/>'
+        '<path d="M2 10 C 7 5, 17 5, 22 10"/>'
+        '<path d="M2 10 L 2 18"/>'
+        '<path d="M22 10 L 22 18"/>'
+        '<path d="M7 8 L 7 18"/>'
+        '<path d="M12 7 L 12 18"/>'
+        '<path d="M17 8 L 17 18"/>'
+        '<path d="M2 18 L 22 18"/>'
         '</svg>'
     )
     st.markdown(
@@ -352,9 +377,8 @@ def cabecalho() -> None:
                 </div>
             </div>
             <div class="meta">
-                <span class="pill muted">MÓDULO · {APP_MODULO}</span>
-                <span class="pill">{APP_VERSAO}</span>
-                <span class="dot" title="Sistema operacional"></span>
+                <span class="pill">{APP_MODULO} · {APP_VERSAO}</span>
+                <span class="pill status"><span class="dot"></span>ATIVO</span>
             </div>
         </div>
         """,
@@ -389,32 +413,25 @@ ICONE_IMPACTO = (
 
 def cards_explicativos() -> None:
     etapas = [
-        ("01", ICONE_PASTA, "Importar dados", "Entrada",
-         "Upload de CSV, XLSX, KML ou KMZ — ou base de demonstração."),
-        ("02", ICONE_MAPA, "Inventário em mapa", "Visualização",
+        ("01", ICONE_PASTA, "Importar dados",
+         "Upload de CSV, XLSX, KML ou KMZ, ou base de demonstração."),
+        ("02", ICONE_MAPA, "Inventário em mapa",
          "OAEs georreferenciadas e coloridas pela Nota Geral."),
-        ("03", ICONE_INTERDICAO, "Cenário de interdição", "Configuração",
-         "Defina obras fora de serviço e o par origem/destino analisado."),
-        ("04", ICONE_IMPACTO, "Impacto na rede", "Análise",
-         "Rota base × rota alternativa e indicadores de desempenho."),
+        ("03", ICONE_INTERDICAO, "Cenário de interdição",
+         "Defina obras fora de serviço e o par origem-destino."),
+        ("04", ICONE_IMPACTO, "Impacto na rede",
+         "Rota base, rota alternativa e indicadores de desempenho."),
     ]
-    total = len(etapas)
-    cols = st.columns(total)
-    for col, (num, icone, titulo, categoria, texto) in zip(cols, etapas):
+    cols = st.columns(len(etapas), gap="small")
+    for col, (num, icone, titulo, texto) in zip(cols, etapas):
         col.markdown(
             f"""
             <div class="step-card">
-                <div class="step-label">
-                    <span class="num">ETAPA {num}</span>
-                    <span class="sep">/</span>
-                    <span>{total:02d}</span>
-                    <span class="sep">·</span>
-                    <span>{categoria}</span>
-                </div>
                 <div class="head">
+                    <span class="step-chip">ETAPA {num}</span>
                     <span class="icon">{icone}</span>
-                    <span class="title">{titulo}</span>
                 </div>
+                <div class="title">{titulo}</div>
                 <p>{texto}</p>
             </div>
             """,
@@ -915,9 +932,9 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
 
     usar_demo = st.sidebar.toggle("Usar base de demonstração", value=True, help="Carrega sample_data/oae_teste.csv")
     arquivo = st.sidebar.file_uploader(
-        "Carregar arquivo (CSV, XLSX, KML ou KMZ)",
+        "Carregar arquivo",
         type=["csv", "xlsx", "xls", "kml", "kmz"],
-        help="Aceita variações de nomes de colunas.",
+        help="Formatos aceitos: CSV, XLSX, KML, KMZ. Aceita variações de nomes de colunas.",
     )
 
     st.sidebar.markdown("---")
