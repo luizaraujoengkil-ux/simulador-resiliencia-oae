@@ -371,6 +371,24 @@ def aplicar_estilo() -> None:
             border-radius: 3px;
             font-size: 0.74rem;
         }
+        .slider-hint {
+            margin: -0.2rem 0 0.4rem;
+            padding: 0.45rem 0.6rem;
+            background: rgba(244, 162, 97, 0.08);
+            border-left: 2px solid #F4A261;
+            border-radius: 4px;
+            font-size: 0.76rem;
+            color: #C8D2E6;
+            line-height: 1.4;
+        }
+        .slider-hint b { color: #F4A261; }
+        .slider-hint code {
+            background: rgba(255, 255, 255, 0.06);
+            color: #F5F8FF;
+            padding: 0.05rem 0.28rem;
+            border-radius: 3px;
+            font-size: 0.72rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -983,7 +1001,20 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         ["Automático (OSM → simplificado se falhar)", "Forçar modo simplificado"],
         index=0,
     )
-    raio_km = st.sidebar.slider("Raio (km) para baixar rede via OSM", 1, 30, value=8)
+    raio_km = st.sidebar.slider(
+        "Raio (km) para baixar rede via OSM",
+        1, 30, value=8,
+        help="Define o tamanho da área de download. Quanto maior, mais ruas — porém mais lento e pesado.",
+    )
+    st.sidebar.markdown(
+        """
+        <div class="slider-hint">
+            ⚡ <b>Quanto maior o raio, mais lento.</b><br>
+            Sugestão: <code>3-5 km</code> área urbana &middot; <code>8-15 km</code> região &middot; <code>20-30 km</code> só se necessário.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     interdicao: list[str] = []
     origem = destino = None
