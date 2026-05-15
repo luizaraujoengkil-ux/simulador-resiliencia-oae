@@ -114,8 +114,14 @@ def aplicar_estilo() -> None:
             transform: translateY(-2px);
             border-color: #00E0D4;
         }
+        .step-card .head {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            margin-bottom: 0.4rem;
+        }
         .step-card .num {
-            display: inline-block;
+            flex-shrink: 0;
             width: 28px;
             height: 28px;
             border-radius: 50%;
@@ -124,16 +130,38 @@ def aplicar_estilo() -> None:
             font-weight: 700;
             text-align: center;
             line-height: 28px;
-            margin-right: 0.5rem;
+            font-size: 0.9rem;
         }
-        .step-card h4 {
-            display: inline-block;
+        .step-card .icon {
+            flex-shrink: 0;
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            background: rgba(0, 224, 212, 0.12);
+            border: 1px solid rgba(0, 224, 212, 0.35);
+            color: #00E0D4;
+        }
+        .step-card .icon svg {
+            width: 18px;
+            height: 18px;
+            stroke: #00E0D4;
+            stroke-width: 2;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .step-card .title {
             margin: 0;
             font-size: 1rem;
-            vertical-align: middle;
+            font-weight: 700;
+            color: #FFFFFF;
+            line-height: 1.2;
         }
         .step-card p {
-            margin: 0.45rem 0 0 0;
+            margin: 0;
             font-size: 0.9rem;
             opacity: 0.85;
         }
@@ -192,19 +220,52 @@ def cabecalho() -> None:
     )
 
 
+ICONE_PASTA = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'
+    '</svg>'
+)
+ICONE_MAPA = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2z"/>'
+    '<path d="M9 4v14"/><path d="M15 6v14"/>'
+    '</svg>'
+)
+ICONE_INTERDICAO = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<circle cx="12" cy="12" r="9"/>'
+    '<path d="M5.6 5.6l12.8 12.8"/>'
+    '</svg>'
+)
+ICONE_IMPACTO = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<path d="M4 19V5"/><path d="M4 19h16"/>'
+    '<path d="M7 16v-4"/><path d="M12 16V8"/><path d="M17 16v-6"/>'
+    '</svg>'
+)
+
+
 def cards_explicativos() -> None:
     etapas = [
-        ("1", "Carregar base de OAEs", "Faça upload de CSV, XLSX, KML ou KMZ — ou use a base de demonstração."),
-        ("2", "Visualizar mapa de criticidade", "Veja todas as OAEs no mapa, coloridas pela Nota Geral."),
-        ("3", "Selecionar OAE(s) interditada(s)", "Escolha quais obras estão fechadas e defina origem/destino."),
-        ("4", "Calcular impacto na rede", "Compare rota original vs. alternativa e veja indicadores."),
+        ("1", ICONE_PASTA, "Carregar base de OAEs",
+         "Faça upload de CSV, XLSX, KML ou KMZ — ou use a base de demonstração."),
+        ("2", ICONE_MAPA, "Visualizar mapa de criticidade",
+         "Veja todas as OAEs no mapa, coloridas pela Nota Geral."),
+        ("3", ICONE_INTERDICAO, "Selecionar OAE(s) interditada(s)",
+         "Escolha quais obras estão fechadas e defina origem/destino."),
+        ("4", ICONE_IMPACTO, "Calcular impacto na rede",
+         "Compare rota original vs. alternativa e veja indicadores."),
     ]
     cols = st.columns(4)
-    for col, (num, titulo, texto) in zip(cols, etapas):
+    for col, (num, icone, titulo, texto) in zip(cols, etapas):
         col.markdown(
             f"""
             <div class="step-card">
-                <span class="num">{num}</span><h4>{titulo}</h4>
+                <div class="head">
+                    <span class="num">{num}</span>
+                    <span class="icon">{icone}</span>
+                    <span class="title">{titulo}</span>
+                </div>
                 <p>{texto}</p>
             </div>
             """,
