@@ -423,6 +423,97 @@ def aplicar_estilo() -> None:
             font-weight: 700;
             font-size: 1.1rem;
         }
+        /* Legenda em destaque acima do mapa quando há interdições */
+        .legenda-destaque {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.7rem;
+            padding: 0.7rem 1rem;
+            margin: 0.4rem 0 0.7rem;
+            background: linear-gradient(90deg, rgba(230, 57, 70, 0.12), rgba(230, 57, 70, 0.04));
+            border: 1px solid rgba(230, 57, 70, 0.3);
+            border-left: 4px solid #E63946;
+            border-radius: 8px;
+            font-size: 0.88rem;
+            color: #F5F8FF;
+        }
+        .legenda-destaque .badge {
+            background: #E63946;
+            color: #FFFFFF;
+            font-weight: 800;
+            padding: 0.15rem 0.55rem;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+        }
+        .legenda-destaque .legend-pill {
+            background: rgba(255, 255, 255, 0.06);
+            padding: 0.18rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.78rem;
+            color: #C8D2E6;
+        }
+        /* Banner do cenário de interdição */
+        .interdicao-banner {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 1rem 1.25rem;
+            margin: 0.5rem 0 1rem;
+            background: linear-gradient(135deg, rgba(230, 57, 70, 0.18), rgba(244, 162, 97, 0.08));
+            border: 1px solid rgba(230, 57, 70, 0.4);
+            border-left: 4px solid #E63946;
+            border-radius: 10px;
+        }
+        .interdicao-banner .emoji {
+            font-size: 1.7rem;
+            line-height: 1;
+        }
+        .interdicao-banner .count {
+            font-size: 2rem;
+            font-weight: 800;
+            color: #FFFFFF;
+            font-family: 'JetBrains Mono', monospace;
+            line-height: 1;
+        }
+        .interdicao-banner .label {
+            font-size: 1.05rem;
+            color: #F5F8FF;
+            font-weight: 600;
+        }
+        .interdicao-banner .total {
+            margin-left: auto;
+            font-size: 0.82rem;
+            color: #A8B5CC;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: 0.04em;
+        }
+        /* Estado vazio */
+        .empty-state {
+            text-align: center;
+            padding: 2rem 1.5rem;
+            background: #0F1B33;
+            border: 1px dashed #2A3B5C;
+            border-radius: 12px;
+            margin: 0.5rem 0 1rem;
+        }
+        .empty-state .big-emoji {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+            opacity: 0.8;
+        }
+        .empty-state .big-text {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #F5F8FF;
+            margin-bottom: 0.4rem;
+        }
+        .empty-state .small-text {
+            font-size: 0.9rem;
+            color: #A8B5CC;
+        }
+        .empty-state b { color: #00E0D4; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -488,8 +579,8 @@ def cards_explicativos() -> None:
          "Veja a criticidade no mapa interativo (botão ⛶ abre em tela cheia).",
          "mapa-criticidade"),
         ("3", "⛔", "Selecionar interdição",
-         "Escolha uma ou mais OAEs para fechar.",
-         None),
+         "Veja quais OAEs estão fechadas no cenário atual.",
+         "cenario-interdicao"),
         ("4", "📊", "Calcular impacto",
          "Compare rotas e variação de distância.",
          None),
@@ -1345,16 +1436,76 @@ def main() -> None:
         return
 
     # Mapa geral — alvo do card "2. Visualizar mapa"
+    interdicao_atual = opcoes.get("interdicao") or []
     st.markdown('<div id="mapa-criticidade"></div>', unsafe_allow_html=True)
     st.markdown("### 📍 Mapa geral de criticidade")
-    st.caption(
-        "Clique no botão **⛶** no canto superior direito do mapa para expandir em tela cheia. "
-        "Use **Esc** ou clique no botão novamente para voltar."
-    )
-    mapa_geral = desenhar_mapa(df, titulo=None)
+
+    if interdicao_atual:
+        st.markdown(
+            f"""
+            <div class="legenda-destaque">
+                <span class="badge">⛔ {len(interdicao_atual)}</span>
+                <span><b>OAE(s) interditada(s)</b> aparecem no mapa com ícone preto de proibido.</span>
+                <span class="legend-pill">🔴 crítica</span>
+                <span class="legend-pill">🟠 ruim</span>
+                <span class="legend-pill">🟡 regular</span>
+                <span class="legend-pill">🟢 ótima</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption(
+            "Clique no botão **⛶** no canto superior direito do mapa para expandir em tela cheia. "
+            "Cores indicam a Nota Geral de cada OAE."
+        )
+
+    mapa_geral = desenhar_mapa(df, interditadas=interdicao_atual, titulo=None)
     st_folium(mapa_geral, width=None, height=520, returned_objects=[])
 
-    # Âncora alvo do card "1. Carregar base"
+    # ----- Cenário de interdição atual — alvo do card "3. Selecionar interdição"
+    st.markdown('<div id="cenario-interdicao"></div>', unsafe_allow_html=True)
+    st.markdown("### 🚫 Cenário de interdição atual")
+
+    if interdicao_atual:
+        n_int = len(interdicao_atual)
+        plural = "OAE interditada" if n_int == 1 else "OAEs interditadas"
+        st.markdown(
+            f"""
+            <div class="interdicao-banner">
+                <span class="emoji">⛔</span>
+                <span class="count">{n_int}</span>
+                <span class="label">{plural}</span>
+                <span class="total">de {len(df)} no total</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        df_int = df[df["Código OAE"].astype(str).isin([str(c) for c in interdicao_atual])]
+        cols_int = [c for c in ["Código OAE", "Tipo", "Rodovia / Trecho", "Município / UF", "Nota Geral"]
+                    if c in df_int.columns]
+        st.dataframe(
+            df_int[cols_int],
+            use_container_width=True,
+            hide_index=True,
+            height=min(320, 60 + n_int * 36),
+        )
+    else:
+        st.markdown(
+            """
+            <div class="empty-state">
+                <div class="big-emoji">✋</div>
+                <div class="big-text">Nenhuma OAE interditada no cenário atual</div>
+                <div class="small-text">
+                    Use o painel lateral em <b>Interdição</b> para marcar uma ou mais OAEs como fechadas.
+                    Você pode aplicar o filtro de "piores notas" ou escolher manualmente.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ----- Planilha de dados — alvo do card "1. Carregar base"
     st.markdown('<div id="planilha-dados"></div>', unsafe_allow_html=True)
     st.markdown("### 📋 Planilha de dados das OAEs")
     st.caption(
