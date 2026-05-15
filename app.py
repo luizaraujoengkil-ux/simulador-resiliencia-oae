@@ -343,6 +343,34 @@ def aplicar_estilo() -> None:
             font-size: 0.82rem;
             opacity: 0.8;
         }
+        .data-format-hint {
+            margin: 0.4rem 0 0.2rem;
+            padding: 0.6rem 0.75rem;
+            background: rgba(0, 224, 212, 0.06);
+            border: 1px solid rgba(0, 224, 212, 0.25);
+            border-left: 2px solid #00E0D4;
+            border-radius: 6px;
+            font-size: 0.78rem;
+            color: #C8D2E6;
+            line-height: 1.4;
+        }
+        .data-format-hint .hint-title {
+            color: #00E0D4;
+            font-weight: 700;
+            margin-bottom: 0.35rem;
+            font-size: 0.78rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        .data-format-hint .row { margin-top: 0.2rem; }
+        .data-format-hint b { color: #F5F8FF; }
+        .data-format-hint code {
+            background: rgba(255, 255, 255, 0.06);
+            color: #C8D2E6;
+            padding: 0.05rem 0.3rem;
+            border-radius: 3px;
+            font-size: 0.74rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -935,6 +963,17 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         "Carregar arquivo",
         type=["csv", "xlsx", "xls", "kml", "kmz"],
         help="Formatos aceitos: CSV, XLSX, KML, KMZ. Aceita variações de nomes de colunas.",
+    )
+    st.sidebar.markdown(
+        """
+        <div class="data-format-hint">
+            <div class="hint-title">ℹ️ Formato esperado</div>
+            <div class="row"><b>Obrigatórias:</b> <code>Latitude</code>, <code>Longitude</code></div>
+            <div class="row"><b>Opcionais (recomendadas):</b> <code>Código OAE</code>, <code>Nota Geral</code>, <code>Município</code>, <code>Rodovia</code>, <code>Tipo</code></div>
+            <div class="row">Aceita variações: <code>lat</code>, <code>lng</code>, <code>nota</code>, <code>cidade</code>, <code>trecho</code>...</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     st.sidebar.markdown("---")
