@@ -100,91 +100,59 @@ def aplicar_estilo() -> None:
         .stMarkdown h3 { font-size: 1.08rem; font-weight: 600; margin: 0.9rem 0 0.5rem; color: #F5F8FF; }
         .stMarkdown p, .stMarkdown li { font-size: 0.94rem; color: #C8D2E6; }
 
-        /* ----- HERO (research-paper style) ----- */
+        /* ----- HERO (gradiente vivo, título escuro) ----- */
         .app-hero {
             position: relative;
             overflow: hidden;
-            background:
-                radial-gradient(900px 260px at 100% 0%, rgba(0, 224, 212, 0.16), transparent 60%),
-                radial-gradient(700px 280px at 0% 100%, rgba(111, 168, 255, 0.10), transparent 65%),
-                linear-gradient(180deg, #0F2244 0%, #08152C 100%);
-            border: 1px solid #1F2D4A;
-            border-radius: 14px;
-            padding: 1.4rem 1.7rem;
-            margin-bottom: 1.1rem;
+            background: linear-gradient(135deg, #1DE9C8 0%, #00CFC8 40%, #00B4D8 70%, #1976D2 100%);
+            border: none;
+            border-radius: 18px;
+            padding: 1.8rem 2rem;
+            margin-bottom: 1.4rem;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 1.6rem;
-            color: #F5F8FF;
-            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+            gap: 1.4rem;
+            color: #0F1B33;
+            box-shadow: 0 16px 38px rgba(0, 188, 212, 0.32);
         }
-        /* Padrão sutil de "grade viária" no fundo direito */
+        /* brilho sutil canto superior direito */
         .app-hero::after {
             content: "";
             position: absolute;
-            right: 0; top: 0; bottom: 0; width: 45%;
-            background-image:
-                linear-gradient(90deg, rgba(0,224,212,0.04) 1px, transparent 1px),
-                linear-gradient(0deg,  rgba(0,224,212,0.04) 1px, transparent 1px);
-            background-size: 28px 28px;
-            mask-image: linear-gradient(270deg, rgba(0,0,0,0.6), transparent 70%);
-            -webkit-mask-image: linear-gradient(270deg, rgba(0,0,0,0.6), transparent 70%);
+            right: -60px; top: -80px;
+            width: 280px; height: 280px;
+            background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%);
             pointer-events: none;
         }
         .app-hero > * { position: relative; z-index: 1; }
         .app-hero .brand {
             display: flex;
             align-items: center;
-            gap: 1.1rem;
+            gap: 1rem;
             min-width: 0;
+            flex: 1;
         }
-        .app-hero .mark {
-            width: 56px;
-            height: 56px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, rgba(0, 224, 212, 0.14), rgba(111, 168, 255, 0.06));
-            border: 1px solid rgba(0, 224, 212, 0.45);
-            border-radius: 12px;
+        .app-hero .hero-icon {
+            font-size: 3rem;
+            line-height: 1;
             flex-shrink: 0;
-            box-shadow:
-                0 0 0 4px rgba(0, 224, 212, 0.05),
-                inset 0 0 24px rgba(0, 224, 212, 0.08);
+            filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.25));
         }
-        .app-hero .mark svg { width: 36px; height: 36px; display: block; }
         .app-hero .titlebar { display: flex; flex-direction: column; min-width: 0; }
         .app-hero h1 {
             margin: 0;
-            font-size: 1.75rem;
+            font-size: 2rem;
             font-weight: 800;
             line-height: 1.1;
-            color: #FFFFFF;
-            letter-spacing: -0.015em;
-            background: linear-gradient(180deg, #FFFFFF 60%, #C9D8F0 100%);
-            -webkit-background-clip: text;
-            background-clip: text;
-            color: transparent;
+            color: #0F1B33;
+            letter-spacing: -0.02em;
         }
         .app-hero .subtitle {
-            position: relative;
-            display: inline-block;
-            margin: 0.5rem 0 0;
-            padding-bottom: 0.55rem;
-            font-size: 0.96rem;
-            color: #B8C5DD;
-            font-weight: 400;
-            letter-spacing: 0.005em;
-        }
-        .app-hero .subtitle::after {
-            content: "";
-            position: absolute;
-            left: 0; bottom: 0;
-            width: 96px;
-            height: 2px;
-            background: linear-gradient(90deg, #00E0D4 0%, #6FA8FF 60%, transparent 100%);
-            border-radius: 2px;
+            margin: 0.55rem 0 0;
+            font-size: 1rem;
+            color: #163354;
+            font-weight: 500;
+            opacity: 0.85;
         }
         .app-hero .meta {
             display: flex;
@@ -196,110 +164,72 @@ def aplicar_estilo() -> None:
         .app-hero .pill {
             font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
             font-size: 0.7rem;
-            background: rgba(0, 224, 212, 0.12);
-            border: 1px solid rgba(0, 224, 212, 0.45);
-            color: #00E0D4;
+            background: rgba(15, 27, 51, 0.18);
+            border: 1px solid rgba(15, 27, 51, 0.25);
+            color: #0F1B33;
             padding: 0.32rem 0.65rem;
             border-radius: 5px;
             letter-spacing: 0.06em;
             font-weight: 700;
             white-space: nowrap;
+            backdrop-filter: blur(4px);
         }
         .app-hero .pill.status {
-            background: rgba(74, 222, 128, 0.1);
-            border-color: rgba(74, 222, 128, 0.4);
-            color: #4ADE80;
+            background: rgba(255, 255, 255, 0.22);
+            border-color: rgba(15, 27, 51, 0.2);
+            color: #0F2D1F;
             display: inline-flex;
             align-items: center;
             gap: 0.4rem;
         }
         .app-hero .pill.status .dot {
-            width: 6px;
-            height: 6px;
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
-            background: #4ADE80;
-            box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+            background: #14B86A;
+            box-shadow: 0 0 0 3px rgba(20, 184, 106, 0.25);
             animation: pulse 2s ease-in-out infinite;
         }
         @keyframes pulse {
-            0%, 100% { box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18); }
-            50%      { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0.0); }
+            0%, 100% { box-shadow: 0 0 0 3px rgba(20, 184, 106, 0.25); }
+            50%      { box-shadow: 0 0 0 6px rgba(20, 184, 106, 0.0); }
         }
 
-        /* ----- STEP CARDS ----- */
+        /* ----- STEP CARDS (estilo numerado, título cyan) ----- */
         .step-card {
             position: relative;
-            background: linear-gradient(180deg, #0F1B33 0%, #0C1730 100%);
+            background: #0F1B33;
             border: 1px solid #1F2D4A;
-            border-radius: 10px;
-            padding: 1rem 1.1rem 1.05rem;
+            border-radius: 12px;
+            padding: 1.1rem 1.2rem 1.15rem;
             height: 100%;
             transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
-            overflow: hidden;
-        }
-        .step-card::after {
-            content: "";
-            position: absolute;
-            left: 0; top: 0; bottom: 0;
-            width: 3px;
-            background: linear-gradient(180deg, #00E0D4, transparent);
-            opacity: 0.85;
         }
         .step-card:hover {
             transform: translateY(-2px);
-            border-color: #2A3B5C;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-        }
-        .step-card .head {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 0.6rem;
-            margin-bottom: 0.7rem;
-        }
-        .step-card .step-chip {
-            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
-            font-size: 0.66rem;
-            font-weight: 700;
-            color: #00E0D4;
-            background: rgba(0, 224, 212, 0.1);
-            border: 1px solid rgba(0, 224, 212, 0.32);
-            padding: 0.18rem 0.45rem;
-            border-radius: 4px;
-            letter-spacing: 0.06em;
-        }
-        .step-card .icon {
-            flex-shrink: 0;
-            width: 36px;
-            height: 36px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            background: rgba(0, 224, 212, 0.08);
-            border: 1px solid rgba(0, 224, 212, 0.28);
-            border-radius: 8px;
-        }
-        .step-card .icon svg {
-            width: 18px;
-            height: 18px;
-            stroke: #00E0D4;
-            stroke-width: 1.7;
-            fill: none;
-            stroke-linecap: round;
-            stroke-linejoin: round;
+            border-color: #00E0D4;
+            box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4);
         }
         .step-card .title {
-            margin: 0 0 0.35rem;
-            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            margin: 0 0 0.55rem;
+            font-size: 1.08rem;
             font-weight: 700;
-            color: #FFFFFF;
+            color: #00E0D4;
             line-height: 1.25;
+        }
+        .step-card .title .emoji {
+            font-size: 1.25rem;
+            line-height: 1;
+            filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
         }
         .step-card p {
             margin: 0;
-            font-size: 0.86rem;
-            color: #A8B5CC;
-            line-height: 1.45;
+            font-size: 0.92rem;
+            color: #C8D2E6;
+            line-height: 1.5;
         }
 
         /* ----- Métricas ----- */
@@ -477,35 +407,11 @@ APP_MODULO = "OAE-SIM"
 
 
 def cabecalho() -> None:
-    # OAE interditada: ponte estaiada + sinal de proibido (vermelho) no canto
-    mark_svg = (
-        '<svg viewBox="0 0 32 32" stroke="#00E0D4" stroke-width="1.8" fill="none" '
-        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
-        # cabo principal (arco)
-        '<path d="M3 19 C 9 13, 23 13, 29 19"/>'
-        # tabuleiro
-        '<path d="M3 19 L 29 19" stroke-width="2"/>'
-        # pilares
-        '<path d="M4 19 L 4 26"/>'
-        '<path d="M28 19 L 28 26"/>'
-        # estais
-        '<path d="M8 15.2 L 8 19" stroke-width="1.3" opacity="0.85"/>'
-        '<path d="M12 13.4 L 12 19" stroke-width="1.3" opacity="0.85"/>'
-        '<path d="M16 13 L 16 19" stroke-width="1.3" opacity="0.85"/>'
-        '<path d="M20 13.4 L 20 19" stroke-width="1.3" opacity="0.85"/>'
-        '<path d="M24 15.2 L 24 19" stroke-width="1.3" opacity="0.85"/>'
-        # linha d agua / chão
-        '<path d="M3 26 L 29 26" stroke-width="1.3" opacity="0.4"/>'
-        # selo de interdição (canto superior direito)
-        '<circle cx="25" cy="7" r="5.5" stroke="#FF6B6B" stroke-width="1.8" fill="rgba(255,107,107,0.18)"/>'
-        '<line x1="21.1" y1="3.1" x2="28.9" y2="10.9" stroke="#FF6B6B" stroke-width="1.8"/>'
-        '</svg>'
-    )
     st.markdown(
         f"""
         <div class="app-hero">
             <div class="brand">
-                <span class="mark">{mark_svg}</span>
+                <span class="hero-icon">🌉</span>
                 <div class="titlebar">
                     <h1>{APP_TITLE}</h1>
                     <span class="subtitle">{APP_SUBTITLE}</span>
@@ -548,25 +454,24 @@ ICONE_IMPACTO = (
 
 def cards_explicativos() -> None:
     etapas = [
-        ("01", ICONE_PASTA, "Importar dados",
-         "Upload de CSV, XLSX, KML ou KMZ, ou base de demonstração."),
-        ("02", ICONE_MAPA, "Inventário em mapa",
-         "OAEs georreferenciadas e coloridas pela Nota Geral."),
-        ("03", ICONE_INTERDICAO, "Cenário de interdição",
-         "Defina obras fora de serviço e o par origem-destino."),
-        ("04", ICONE_IMPACTO, "Impacto na rede",
-         "Rota base, rota alternativa e indicadores de desempenho."),
+        ("1", "📁", "Carregar base",
+         "Importe CSV, XLSX, KML ou KMZ com as OAEs."),
+        ("2", "🗺️", "Visualizar mapa",
+         "Veja a criticidade no mapa interativo."),
+        ("3", "⛔", "Selecionar interdição",
+         "Escolha uma ou mais OAEs para fechar."),
+        ("4", "📊", "Calcular impacto",
+         "Compare rotas e variação de distância."),
     ]
     cols = st.columns(len(etapas), gap="small")
-    for col, (num, icone, titulo, texto) in zip(cols, etapas):
+    for col, (num, emoji, titulo, texto) in zip(cols, etapas):
         col.markdown(
             f"""
             <div class="step-card">
-                <div class="head">
-                    <span class="step-chip">ETAPA {num}</span>
-                    <span class="icon">{icone}</span>
+                <div class="title">
+                    <span class="emoji">{emoji}</span>
+                    <span>{num}. {titulo}</span>
                 </div>
-                <div class="title">{titulo}</div>
                 <p>{texto}</p>
             </div>
             """,
