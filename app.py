@@ -856,15 +856,15 @@ def desenhar_mapa(
         force_separate_button=True,
     ).add_to(m)
 
-    # Malha viária (fundo azul fino) — renderizada PRIMEIRO para ficar atrás de tudo
+    # Malha viária (fundo azul) — renderizada PRIMEIRO para ficar atrás de tudo
     if malha and malha.get("features"):
         folium.GeoJson(
             malha,
             name="Malha viária",
             style_function=lambda x: {
-                "color": "#1E88E5",
-                "weight": 1.4,
-                "opacity": 0.45,
+                "color": "#1976D2",
+                "weight": 2.0,
+                "opacity": 0.65,
             },
         ).add_to(m)
 
@@ -1204,6 +1204,13 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         unsafe_allow_html=True,
     )
 
+    mostrar_malha = st.sidebar.toggle(
+        "🌐 Mostrar malha viária no mapa geral",
+        value=False,
+        help="Baixa a rede viária do OSM e desenha por cima do mapa de criticidade. "
+             "A 1ª ativação pode levar alguns segundos (depois fica em cache).",
+    )
+
     interdicao: list[str] = []
     origem = destino = None
     executar = False
@@ -1369,6 +1376,7 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         "arquivo": arquivo,
         "modo_rede": modo_rede,
         "raio_km": raio_km,
+        "mostrar_malha": mostrar_malha,
         "interdicao": interdicao,
         "origem": origem,
         "destino": destino,
@@ -1797,7 +1805,26 @@ def main() -> None:
             "Cores indicam a Nota Geral de cada OAE."
         )
 
-    mapa_geral = desenhar_mapa(df, interditadas=interdicao_atual, titulo=None)
+    # Tenta baixar a malha viária se o usuário ativou o toggle
+    malha_geral = None
+    if opcoes.get("mostrar_malha"):
+        centro_lat = float(df["Latitude"].mean())
+        centro_lon = float(df["Longitude"].mean())
+        with st.spinner("🌐 Baixando malha viária do OpenStreetMap (cacheado a partir da 2ª vez)..."):
+            G_geral = construir_grafo_osm(centro_lat, centro_lon, opcoes["raio_km"] * 1000)
+        if G_geral is not None:
+            malha_geral = _extrair_malha_geojson(G_geral)
+            st.caption(
+                f"🌐 Malha OSM carregada: **{G_geral.number_of_nodes()} nós · "
+                f"{G_geral.number_of_edges()} vias** dentro de **{opcoes['raio_km']} km**."
+            )
+        else:
+            st.warning(
+                "⚠️ Não foi possível baixar a malha (sem internet ou área inválida). "
+                "Desative o toggle 🌐 ou tente novamente."
+            )
+
+    mapa_geral = desenhar_mapa(df, interditadas=interdicao_atual, malha=malha_geral, titulo=None)
     st_folium(mapa_geral, width=None, height=520, returned_objects=[])
 
     # ----- Cenário de interdição atual — alvo do card "3. Selecionar interdição"
