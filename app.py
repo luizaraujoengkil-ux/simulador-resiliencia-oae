@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import math
 import os
+import random
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -423,6 +424,24 @@ def aplicar_estilo() -> None:
             color: #C8D2E6;
         }
         .filter-hint b { color: #F5F8FF; }
+        .sim-counter {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 0.4rem 0 0.3rem;
+            padding: 0.55rem 0.75rem;
+            background: linear-gradient(90deg, rgba(0, 224, 212, 0.08), rgba(111, 168, 255, 0.05));
+            border: 1px solid rgba(0, 224, 212, 0.3);
+            border-radius: 6px;
+            font-size: 0.82rem;
+            color: #C8D2E6;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+        }
+        .sim-counter .count {
+            color: #00E0D4;
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1059,49 +1078,59 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         opcoes = df["Código OAE"].astype(str).tolist()
         tem_nota = "Nota Geral" in df.columns
 
-        # Filtro por Nota Geral (limite ajustável)
+        # ---- Quantidade de OAEs a marcar como críticas ----
+        max_crit = min(10, len(opcoes))
+        qtd_criticas = st.sidebar.number_input(
+            "Quantas OAEs marcar como críticas?",
+            min_value=1,
+            max_value=max(1, max_crit),
+            value=1,
+            step=1,
+            help="O botão abaixo seleciona automaticamente as N piores OAEs por Nota Geral "
+                 "(1 = crítica → 5 = ótima). Limite: 10 OAEs.",
+            key="qtd_criticas",
+        )
+
+        # Lista das N piores (Nota Geral ascendente). Se não houver nota, usa ordem original.
         if tem_nota:
-            nota_limite = st.sidebar.slider(
-                "Filtro por Nota Geral",
-                min_value=1, max_value=5, value=2, step=1,
-                help="Seleciona OAEs com Nota Geral igual ou pior que este valor. "
-                     "1 = crítica · 5 = ótima. O botão abaixo aplica o filtro.",
-                key="nota_filtro_limite",
+            piores = (
+                df.sort_values("Nota Geral", ascending=True, kind="stable")
+                  ["Código OAE"].astype(str).tolist()
             )
-            oaes_filtradas = (
-                df[df["Nota Geral"].astype(float) <= nota_limite]["Código OAE"]
-                .astype(str).tolist()
+        else:
+            piores = opcoes[:]
+        selecao_criticas = piores[: int(qtd_criticas)]
+
+        # Preview da seleção que será aplicada
+        if selecao_criticas:
+            preview = " · ".join(
+                f"{cod} (Nota {df.loc[df['Código OAE'].astype(str)==cod, 'Nota Geral'].iloc[0]:.0f})"
+                if tem_nota else cod
+                for cod in selecao_criticas[:5]
             )
+            if len(selecao_criticas) > 5:
+                preview += f" … +{len(selecao_criticas) - 5}"
             st.sidebar.markdown(
                 f"""
                 <div class="filter-hint">
-                    📊 Limite atual: <b>Nota ≤ {nota_limite}</b> ·
-                    <b>{len(oaes_filtradas)}</b> OAE(s) na faixa
+                    📋 <b>Pré-seleção:</b> {preview}
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
-        else:
-            nota_limite = None
-            oaes_filtradas = []
 
-        # Botões de atalho — modificam o session_state antes do multiselect ser renderizado
+        # ---- Botões de ação ----
         col_a, col_b = st.sidebar.columns(2)
         sel_atual = st.session_state.get("interdicao_select", [])
-
         if col_a.button(
-            f"📌 Aplicar filtro ({len(oaes_filtradas)})" if tem_nota else "📌 Selecionar todas",
+            f"📌 Aplicar ({len(selecao_criticas)})",
             use_container_width=True,
-            disabled=(tem_nota and len(oaes_filtradas) == 0),
-            help=(
-                f"Seleciona todas as OAEs com Nota Geral ≤ {nota_limite}."
-                if tem_nota else "Seleciona todas as OAEs da base."
-            ),
+            disabled=len(selecao_criticas) == 0,
+            help="Marca como interditadas as N piores OAEs selecionadas acima.",
             key="btn_aplicar_filtro",
         ):
-            st.session_state["interdicao_select"] = oaes_filtradas if tem_nota else opcoes
+            st.session_state["interdicao_select"] = selecao_criticas
             st.rerun()
-
         if col_b.button(
             "🗑️ Limpar",
             use_container_width=True,
@@ -1112,12 +1141,17 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             st.session_state["interdicao_select"] = []
             st.rerun()
 
+        # ---- Multiselect ----
+        # Inicializa com a 1ª OAE pré-selecionada na 1ª vez que o app é aberto.
+        if "interdicao_select" not in st.session_state:
+            st.session_state["interdicao_select"] = piores[:1]
+
         interdicao = st.sidebar.multiselect(
             "OAEs interditadas (uma ou várias)",
             opcoes,
             key="interdicao_select",
             placeholder="Clique e escolha uma ou mais OAEs",
-            help="Use o filtro acima ou selecione manualmente. Cada OAE marcada será simulada como fechada.",
+            help="Use o botão acima ou selecione manualmente. Cada OAE marcada será simulada como fechada.",
         )
 
         n_sel = len(interdicao)
@@ -1133,13 +1167,60 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             unsafe_allow_html=True,
         )
 
+        # ---- Origem e destino ----
         st.sidebar.subheader("Origem e destino")
         disponiveis = [c for c in opcoes if c not in interdicao] or opcoes
-        origem = st.sidebar.selectbox("Origem", disponiveis, index=0)
-        destino_idx = len(disponiveis) - 1
-        destino = st.sidebar.selectbox("Destino", disponiveis, index=destino_idx)
 
-        executar = st.sidebar.button("▶️ Executar simulação", use_container_width=True)
+        # Garante que valores em session_state sejam válidos para a lista atual
+        if st.session_state.get("origem_sel") not in disponiveis:
+            st.session_state["origem_sel"] = disponiveis[0]
+        if st.session_state.get("destino_sel") not in disponiveis:
+            st.session_state["destino_sel"] = disponiveis[-1] if len(disponiveis) > 1 else disponiveis[0]
+
+        origem = st.sidebar.selectbox("Origem", disponiveis, key="origem_sel")
+        destino = st.sidebar.selectbox("Destino", disponiveis, key="destino_sel")
+
+        if st.sidebar.button(
+            "🎲 Sortear origem/destino",
+            use_container_width=True,
+            disabled=len(disponiveis) < 2,
+            help="Sorteia aleatoriamente um par origem/destino entre as OAEs não interditadas. "
+                 "Útil para avaliar interferências em múltiplos cenários.",
+            key="btn_random_od",
+        ):
+            o, d = random.sample(disponiveis, 2)
+            st.session_state["origem_sel"] = o
+            st.session_state["destino_sel"] = d
+            st.rerun()
+
+        # ---- Executar simulação + contador ----
+        st.sidebar.markdown("---")
+        executar = st.sidebar.button(
+            "▶️ Executar simulação",
+            use_container_width=True,
+            type="primary",
+        )
+
+        sim_count = st.session_state.get("sim_count", 0)
+        plural_sim = "simulação executada" if sim_count == 1 else "simulações executadas"
+        st.sidebar.markdown(
+            f"""
+            <div class="sim-counter">
+                <span>📊 {plural_sim}</span>
+                <span class="count">{sim_count}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.sidebar.button(
+            "🧹 Limpar contagem",
+            use_container_width=True,
+            disabled=sim_count == 0,
+            help="Reinicia o contador de simulações desta sessão.",
+            key="btn_limpar_sim",
+        ):
+            st.session_state["sim_count"] = 0
+            st.rerun()
 
     return {
         "usar_demo": usar_demo,
@@ -1298,6 +1379,7 @@ def main() -> None:
             st.warning("Selecione pelo menos uma OAE para interditar antes de executar.")
         else:
             executar_simulacao(df, opcoes)
+            st.session_state["sim_count"] = st.session_state.get("sim_count", 0) + 1
     else:
         st.markdown(
             '<div class="small-note">Selecione OAEs para interditar, defina origem e destino '
