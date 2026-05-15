@@ -389,6 +389,30 @@ def aplicar_estilo() -> None:
             border-radius: 3px;
             font-size: 0.72rem;
         }
+        .selection-counter {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 0.3rem 0 0.5rem;
+            padding: 0.5rem 0.7rem;
+            background: rgba(230, 57, 70, 0.07);
+            border-left: 2px solid #E63946;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            color: #C8D2E6;
+        }
+        .selection-counter .count {
+            color: #FFFFFF;
+            font-weight: 700;
+        }
+        .selection-counter .total {
+            font-size: 0.74rem;
+            color: #8FA0BA;
+        }
+        .selection-counter.empty {
+            background: rgba(143, 160, 186, 0.06);
+            border-left-color: #8FA0BA;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1023,8 +1047,52 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         st.sidebar.markdown("---")
         st.sidebar.subheader("Interdição")
         opcoes = df["Código OAE"].astype(str).tolist()
+        criticas = (
+            df[df["Nota Geral"].astype(float) <= 2]["Código OAE"].astype(str).tolist()
+            if "Nota Geral" in df.columns else []
+        )
+
+        # Botões de atalho — modificam o session_state antes do multiselect ser renderizado
+        col_a, col_b = st.sidebar.columns(2)
+        sel_atual = st.session_state.get("interdicao_select", [])
+        if col_a.button(
+            f"⚠️ Críticas ({len(criticas)})",
+            use_container_width=True,
+            disabled=len(criticas) == 0,
+            help="Seleciona automaticamente todas as OAEs com Nota Geral ≤ 2.",
+            key="btn_criticas",
+        ):
+            st.session_state["interdicao_select"] = criticas
+            st.rerun()
+        if col_b.button(
+            "🗑️ Limpar",
+            use_container_width=True,
+            disabled=not sel_atual,
+            help="Remove todas as OAEs interditadas.",
+            key="btn_limpar",
+        ):
+            st.session_state["interdicao_select"] = []
+            st.rerun()
+
         interdicao = st.sidebar.multiselect(
-            "OAE(s) a interditar", opcoes, help="Selecione uma ou mais obras para simular o fechamento."
+            "OAEs interditadas (uma ou várias)",
+            opcoes,
+            key="interdicao_select",
+            placeholder="Clique e escolha uma ou mais OAEs",
+            help="Você pode selecionar quantas quiser. Cada uma será simulada como fechada.",
+        )
+
+        n_sel = len(interdicao)
+        classe = "selection-counter" + (" empty" if n_sel == 0 else "")
+        rotulo = "OAE selecionada" if n_sel == 1 else "OAEs selecionadas"
+        st.sidebar.markdown(
+            f"""
+            <div class="{classe}">
+                <span>🚫 <span class="count">{n_sel}</span> {rotulo}</span>
+                <span class="total">de {len(opcoes)}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
         st.sidebar.subheader("Origem e destino")
