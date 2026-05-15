@@ -100,79 +100,97 @@ def aplicar_estilo() -> None:
         .stMarkdown h3 { font-size: 1.08rem; font-weight: 600; margin: 0.9rem 0 0.5rem; color: #F5F8FF; }
         .stMarkdown p, .stMarkdown li { font-size: 0.94rem; color: #C8D2E6; }
 
-        /* ----- HERO ----- */
+        /* ----- HERO (research-paper style) ----- */
         .app-hero {
             position: relative;
+            overflow: hidden;
             background:
-                radial-gradient(1200px 240px at 0% 0%, rgba(0, 224, 212, 0.08), transparent 60%),
-                linear-gradient(180deg, #112241 0%, #0C1830 100%);
+                radial-gradient(900px 260px at 100% 0%, rgba(0, 224, 212, 0.16), transparent 60%),
+                radial-gradient(700px 280px at 0% 100%, rgba(111, 168, 255, 0.10), transparent 65%),
+                linear-gradient(180deg, #0F2244 0%, #08152C 100%);
             border: 1px solid #1F2D4A;
-            border-radius: 10px;
-            padding: 1.1rem 1.4rem;
-            margin-bottom: 1rem;
+            border-radius: 14px;
+            padding: 1.4rem 1.7rem;
+            margin-bottom: 1.1rem;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 1.5rem;
+            gap: 1.6rem;
             color: #F5F8FF;
+            box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
         }
-        .app-hero::before {
+        /* Padrão sutil de "grade viária" no fundo direito */
+        .app-hero::after {
             content: "";
             position: absolute;
-            left: 0; top: 12%; bottom: 12%;
-            width: 3px;
-            background: linear-gradient(180deg, #00E0D4, #6FA8FF);
-            border-radius: 0 2px 2px 0;
+            right: 0; top: 0; bottom: 0; width: 45%;
+            background-image:
+                linear-gradient(90deg, rgba(0,224,212,0.04) 1px, transparent 1px),
+                linear-gradient(0deg,  rgba(0,224,212,0.04) 1px, transparent 1px);
+            background-size: 28px 28px;
+            mask-image: linear-gradient(270deg, rgba(0,0,0,0.6), transparent 70%);
+            -webkit-mask-image: linear-gradient(270deg, rgba(0,0,0,0.6), transparent 70%);
+            pointer-events: none;
         }
+        .app-hero > * { position: relative; z-index: 1; }
         .app-hero .brand {
             display: flex;
             align-items: center;
-            gap: 0.9rem;
+            gap: 1.1rem;
             min-width: 0;
         }
         .app-hero .mark {
-            width: 44px;
-            height: 44px;
+            width: 56px;
+            height: 56px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            background: rgba(0, 224, 212, 0.09);
-            border: 1px solid rgba(0, 224, 212, 0.4);
-            border-radius: 8px;
+            background: linear-gradient(135deg, rgba(0, 224, 212, 0.14), rgba(111, 168, 255, 0.06));
+            border: 1px solid rgba(0, 224, 212, 0.45);
+            border-radius: 12px;
             flex-shrink: 0;
+            box-shadow:
+                0 0 0 4px rgba(0, 224, 212, 0.05),
+                inset 0 0 24px rgba(0, 224, 212, 0.08);
         }
-        .app-hero .mark svg {
-            width: 24px;
-            height: 24px;
-            stroke: #00E0D4;
-            stroke-width: 1.7;
-            fill: none;
-            stroke-linecap: round;
-            stroke-linejoin: round;
-        }
-        .app-hero .titlebar {
-            display: flex;
-            flex-direction: column;
-            min-width: 0;
-        }
+        .app-hero .mark svg { width: 36px; height: 36px; display: block; }
+        .app-hero .titlebar { display: flex; flex-direction: column; min-width: 0; }
         .app-hero h1 {
             margin: 0;
-            font-size: 1.55rem;
-            font-weight: 700;
-            line-height: 1.15;
+            font-size: 1.75rem;
+            font-weight: 800;
+            line-height: 1.1;
             color: #FFFFFF;
-            letter-spacing: -0.01em;
+            letter-spacing: -0.015em;
+            background: linear-gradient(180deg, #FFFFFF 60%, #C9D8F0 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
         }
         .app-hero .subtitle {
-            margin: 0.2rem 0 0;
-            font-size: 0.95rem;
-            color: #A8B5CC;
+            position: relative;
+            display: inline-block;
+            margin: 0.5rem 0 0;
+            padding-bottom: 0.55rem;
+            font-size: 0.96rem;
+            color: #B8C5DD;
             font-weight: 400;
+            letter-spacing: 0.005em;
+        }
+        .app-hero .subtitle::after {
+            content: "";
+            position: absolute;
+            left: 0; bottom: 0;
+            width: 96px;
+            height: 2px;
+            background: linear-gradient(90deg, #00E0D4 0%, #6FA8FF 60%, transparent 100%);
+            border-radius: 2px;
         }
         .app-hero .meta {
             display: flex;
-            gap: 0.5rem;
-            align-items: center;
+            flex-direction: column;
+            gap: 0.4rem;
+            align-items: flex-end;
             flex-shrink: 0;
         }
         .app-hero .pill {
@@ -181,10 +199,11 @@ def aplicar_estilo() -> None:
             background: rgba(0, 224, 212, 0.12);
             border: 1px solid rgba(0, 224, 212, 0.45);
             color: #00E0D4;
-            padding: 0.3rem 0.6rem;
-            border-radius: 4px;
+            padding: 0.32rem 0.65rem;
+            border-radius: 5px;
             letter-spacing: 0.06em;
             font-weight: 700;
+            white-space: nowrap;
         }
         .app-hero .pill.status {
             background: rgba(74, 222, 128, 0.1);
@@ -200,6 +219,11 @@ def aplicar_estilo() -> None:
             border-radius: 50%;
             background: #4ADE80;
             box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.18); }
+            50%      { box-shadow: 0 0 0 6px rgba(74, 222, 128, 0.0); }
         }
 
         /* ----- STEP CARDS ----- */
@@ -453,16 +477,28 @@ APP_MODULO = "OAE-SIM"
 
 
 def cabecalho() -> None:
-    # Pequeno glifo de "rede viária": uma ponte estilizada com pilares
+    # OAE interditada: ponte estaiada + sinal de proibido (vermelho) no canto
     mark_svg = (
-        '<svg viewBox="0 0 24 24" aria-hidden="true">'
-        '<path d="M2 10 C 7 5, 17 5, 22 10"/>'
-        '<path d="M2 10 L 2 18"/>'
-        '<path d="M22 10 L 22 18"/>'
-        '<path d="M7 8 L 7 18"/>'
-        '<path d="M12 7 L 12 18"/>'
-        '<path d="M17 8 L 17 18"/>'
-        '<path d="M2 18 L 22 18"/>'
+        '<svg viewBox="0 0 32 32" stroke="#00E0D4" stroke-width="1.8" fill="none" '
+        'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        # cabo principal (arco)
+        '<path d="M3 19 C 9 13, 23 13, 29 19"/>'
+        # tabuleiro
+        '<path d="M3 19 L 29 19" stroke-width="2"/>'
+        # pilares
+        '<path d="M4 19 L 4 26"/>'
+        '<path d="M28 19 L 28 26"/>'
+        # estais
+        '<path d="M8 15.2 L 8 19" stroke-width="1.3" opacity="0.85"/>'
+        '<path d="M12 13.4 L 12 19" stroke-width="1.3" opacity="0.85"/>'
+        '<path d="M16 13 L 16 19" stroke-width="1.3" opacity="0.85"/>'
+        '<path d="M20 13.4 L 20 19" stroke-width="1.3" opacity="0.85"/>'
+        '<path d="M24 15.2 L 24 19" stroke-width="1.3" opacity="0.85"/>'
+        # linha d agua / chão
+        '<path d="M3 26 L 29 26" stroke-width="1.3" opacity="0.4"/>'
+        # selo de interdição (canto superior direito)
+        '<circle cx="25" cy="7" r="5.5" stroke="#FF6B6B" stroke-width="1.8" fill="rgba(255,107,107,0.18)"/>'
+        '<line x1="21.1" y1="3.1" x2="28.9" y2="10.9" stroke="#FF6B6B" stroke-width="1.8"/>'
         '</svg>'
     )
     st.markdown(
