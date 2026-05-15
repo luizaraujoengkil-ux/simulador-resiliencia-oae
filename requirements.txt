@@ -8,3 +8,4 @@ networkx>=3.1
 shapely>=2.0
 osmnx>=1.9
 geopandas>=0.14
+fpdf2>=2.7

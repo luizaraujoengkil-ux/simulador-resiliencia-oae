@@ -18,6 +18,7 @@ import os
 import random
 import unicodedata
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 from xml.etree import ElementTree as ET
@@ -582,8 +583,8 @@ def cards_explicativos() -> None:
          "Veja quais OAEs estão fechadas no cenário atual.",
          "cenario-interdicao"),
         ("4", "📊", "Calcular impacto",
-         "Compare rotas e variação de distância.",
-         None),
+         "Compare rotas, indicadores e baixe o relatório em PDF.",
+         "relatorio"),
     ]
     cols = st.columns(len(etapas), gap="small")
     for col, (num, emoji, titulo, texto, anchor) in zip(cols, etapas):
@@ -1289,10 +1290,11 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             "🧹 Limpar contagem",
             use_container_width=True,
             disabled=sim_count == 0,
-            help="Reinicia o contador de simulações desta sessão.",
+            help="Reinicia o contador e apaga o histórico de simulações desta sessão.",
             key="btn_limpar_sim",
         ):
             st.session_state["sim_count"] = 0
+            st.session_state["simulacoes"] = []
             st.rerun()
 
     return {
@@ -1312,14 +1314,14 @@ def obter_ponto(df: pd.DataFrame, codigo: str) -> tuple[float, float]:
     return float(linha["Latitude"]), float(linha["Longitude"])
 
 
-def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> None:
+def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     origem_cod = opcoes["origem"]
     destino_cod = opcoes["destino"]
     interdicao = opcoes["interdicao"] or []
 
     if origem_cod == destino_cod:
         st.warning("Selecione OAEs diferentes para origem e destino.")
-        return
+        return None
 
     o_lat, o_lon = obter_ponto(df, origem_cod)
     d_lat, d_lon = obter_ponto(df, destino_cod)
@@ -1394,6 +1396,208 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> None:
         f"Modo de cálculo utilizado: **{modo_usado}**. "
         "Azul = rota original; vermelho = rota alternativa após interdição."
     )
+
+    return {
+        "timestamp": datetime.now(),
+        "origem": str(origem_cod),
+        "destino": str(destino_cod),
+        "interdicao": [str(c) for c in interdicao],
+        "dist_orig_m": float(dist_orig),
+        "dist_alt_m": float(dist_alt) if tem_alt else 0.0,
+        "tem_alt": bool(tem_alt),
+        "modo": modo_usado,
+    }
+
+
+def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
+    """Gera um relatório PDF consolidando todas as simulações da sessão."""
+    from fpdf import FPDF
+
+    def _txt(s: object) -> str:
+        # Garante que a string é codificável em Latin-1 (suporta PT-BR).
+        s = str(s)
+        return s.encode("latin-1", errors="replace").decode("latin-1")
+
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # ----- Cabeçalho -----
+    pdf.set_fill_color(15, 27, 51)
+    pdf.rect(0, 0, 210, 24, style="F")
+    pdf.set_text_color(255, 255, 255)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_xy(10, 6)
+    pdf.cell(0, 7, _txt("Relatório de Análise de Interdição de OAEs"), ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_x(10)
+    pdf.cell(0, 5, _txt("Simulador de Resiliência da Rede Viária  ·  OAE-SIM v0.1"), ln=True)
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(10)
+
+    # ----- Metadados -----
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 5, _txt(f"Data de geração: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"), ln=True)
+    pdf.cell(0, 5, _txt(f"Base carregada: {len(df)} OAEs"), ln=True)
+    pdf.cell(0, 5, _txt(f"Total de simulações na sessão: {len(simulacoes)}"), ln=True)
+    pdf.ln(3)
+
+    if not simulacoes:
+        pdf.set_font("Helvetica", "I", 11)
+        pdf.multi_cell(0, 6, _txt(
+            "Nenhuma simulação foi executada nesta sessão. "
+            "Volte ao aplicativo, configure um cenário de interdição "
+            "e execute pelo menos uma simulação antes de gerar o relatório."
+        ))
+        return bytes(pdf.output())
+
+    # ----- Resumo executivo -----
+    com_alt = sum(1 for s in simulacoes if s["tem_alt"])
+    sem_alt = len(simulacoes) - com_alt
+    incrementos_km = [
+        (s["dist_alt_m"] - s["dist_orig_m"]) / 1000.0
+        for s in simulacoes
+        if s["tem_alt"] and s["dist_orig_m"] > 0
+    ]
+    incrementos_pct = [
+        (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100.0
+        for s in simulacoes
+        if s["tem_alt"] and s["dist_orig_m"] > 0
+    ]
+    avg_inc = sum(incrementos_km) / len(incrementos_km) if incrementos_km else 0
+    max_inc = max(incrementos_km) if incrementos_km else 0
+    avg_pct = sum(incrementos_pct) / len(incrementos_pct) if incrementos_pct else 0
+    max_pct = max(incrementos_pct) if incrementos_pct else 0
+
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_fill_color(0, 224, 212)
+    pdf.cell(60, 7, _txt(" Resumo executivo"), fill=True, ln=True)
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 5, _txt(
+        f"- Cenários com rota alternativa: {com_alt} de {len(simulacoes)} "
+        f"({com_alt/len(simulacoes)*100:.1f}%)"
+    ), ln=True)
+    pdf.cell(0, 5, _txt(f"- Cenários sem rota alternativa: {sem_alt}"), ln=True)
+    pdf.cell(0, 5, _txt(f"- Aumento médio de distância: +{avg_inc:.2f} km ({avg_pct:+.1f}%)"), ln=True)
+    pdf.cell(0, 5, _txt(f"- Aumento máximo observado: +{max_inc:.2f} km ({max_pct:+.1f}%)"), ln=True)
+    pdf.ln(5)
+
+    # ----- Detalhamento por simulação -----
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.set_fill_color(0, 224, 212)
+    pdf.cell(72, 7, _txt(" Detalhamento das simulações"), fill=True, ln=True)
+    pdf.ln(2)
+
+    headers = ["#", "Hora", "Origem", "Destino", "Intd.", "Modo", "Orig.(km)", "Alt.(km)", "Var.(%)"]
+    widths  = [ 8,    18,     22,        22,         12,     18,      20,           20,         20]
+    pdf.set_font("Helvetica", "B", 8.5)
+    pdf.set_fill_color(220, 230, 240)
+    for h, w in zip(headers, widths):
+        pdf.cell(w, 6, _txt(h), border=1, align="C", fill=True)
+    pdf.ln()
+
+    pdf.set_font("Helvetica", "", 8.5)
+    for i, s in enumerate(simulacoes, 1):
+        hora = s["timestamp"].strftime("%H:%M:%S") if hasattr(s["timestamp"], "strftime") else str(s["timestamp"])
+        var = "-"
+        if s["tem_alt"] and s["dist_orig_m"] > 0:
+            var = f"+{(s['dist_alt_m'] - s['dist_orig_m']) / s['dist_orig_m'] * 100:.1f}%"
+        elif not s["tem_alt"]:
+            var = "sem rota"
+        row = [
+            str(i),
+            hora,
+            s["origem"][:10],
+            s["destino"][:10],
+            str(len(s["interdicao"])),
+            s["modo"],
+            f"{s['dist_orig_m']/1000:.2f}" if s["dist_orig_m"] else "-",
+            f"{s['dist_alt_m']/1000:.2f}" if s["tem_alt"] else "-",
+            var,
+        ]
+        for c, w in zip(row, widths):
+            pdf.cell(w, 5.5, _txt(c), border=1, align="C")
+        pdf.ln()
+    pdf.ln(4)
+
+    # ----- Ranking de OAEs mais críticas -----
+    impactos: dict[str, list[float]] = {}
+    for s in simulacoes:
+        if not s["tem_alt"] or s["dist_orig_m"] <= 0:
+            continue
+        var_pct = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100.0
+        for oae in s["interdicao"]:
+            impactos.setdefault(oae, []).append(var_pct)
+
+    if impactos:
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_fill_color(0, 224, 212)
+        pdf.cell(82, 7, _txt(" Ranking de OAEs mais críticas"), fill=True, ln=True)
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.multi_cell(0, 4.5, _txt(
+            "Calculado como a variação percentual média de distância nos cenários "
+            "em que cada OAE foi marcada como interditada. Quanto maior o valor, "
+            "mais crítica é a OAE para a resiliência da rede."
+        ))
+        pdf.ln(1.5)
+
+        ranked = sorted(impactos.items(), key=lambda x: -sum(x[1]) / len(x[1]))
+        rank_headers = ["Posição", "Código OAE", "Aparições", "Var. média (%)", "Var. máxima (%)"]
+        rank_widths  = [22,         32,           24,           36,                36]
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_fill_color(220, 230, 240)
+        for h, w in zip(rank_headers, rank_widths):
+            pdf.cell(w, 6, _txt(h), border=1, align="C", fill=True)
+        pdf.ln()
+        pdf.set_font("Helvetica", "", 9)
+        for pos, (oae, vars_) in enumerate(ranked[:10], 1):
+            row = [
+                f"{pos}",
+                oae,
+                str(len(vars_)),
+                f"+{sum(vars_)/len(vars_):.1f}%",
+                f"+{max(vars_):.1f}%",
+            ]
+            for c, w in zip(row, rank_widths):
+                pdf.cell(w, 5.5, _txt(c), border=1, align="C")
+            pdf.ln()
+        pdf.ln(4)
+
+    # ----- Metodologia -----
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_fill_color(240, 240, 245)
+    pdf.cell(0, 6, _txt(" Metodologia"), fill=True, ln=True)
+    pdf.ln(1)
+    pdf.set_font("Helvetica", "", 9)
+    pdf.multi_cell(0, 4.5, _txt(
+        "1) A rede viária é obtida do OpenStreetMap dentro de um raio configurável em "
+        "torno do centroide das OAEs, ou substituída por uma rede simplificada "
+        "(conexão por vizinhos mais próximos) quando o OSM não está disponível.\n\n"
+        "2) Cada OAE interditada é mapeada para o nó mais próximo do grafo, e esses "
+        "nós são removidos antes do cálculo do caminho alternativo.\n\n"
+        "3) O caminho mínimo é calculado pelo algoritmo Dijkstra (NetworkX) usando o "
+        "comprimento das vias como peso das arestas. A distância apresentada é em "
+        "metros (convertida para km no relatório).\n\n"
+        "4) A criticidade de uma OAE é estimada de forma empírica a partir do "
+        "aumento percentual médio de distância nos cenários em que ela foi "
+        "interditada. Trata-se de um indicador relativo, não absoluto."
+    ))
+    pdf.ln(2)
+
+    # ----- Rodapé -----
+    pdf.set_y(-15)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(120, 120, 130)
+    pdf.cell(
+        0, 5,
+        _txt(f"Gerado por OAE-SIM v0.1 em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}  ·  "
+             f"github.com/luizaraujoengkil-ux/simulador-resiliencia-oae"),
+        align="C",
+    )
+
+    return bytes(pdf.output())
 
 
 def main() -> None:
@@ -1522,14 +1726,113 @@ def main() -> None:
         if not opcoes["interdicao"]:
             st.warning("Selecione pelo menos uma OAE para interditar antes de executar.")
         else:
-            executar_simulacao(df, opcoes)
-            st.session_state["sim_count"] = st.session_state.get("sim_count", 0) + 1
+            resultado = executar_simulacao(df, opcoes)
+            if resultado is not None:
+                st.session_state.setdefault("simulacoes", []).append(resultado)
+                st.session_state["sim_count"] = st.session_state.get("sim_count", 0) + 1
     else:
         st.markdown(
             '<div class="small-note">Selecione OAEs para interditar, defina origem e destino '
             'e clique em <b>Executar simulação</b> na barra lateral.</div>',
             unsafe_allow_html=True,
         )
+
+    # ----- Relatório consolidado — alvo do card "4. Calcular impacto"
+    st.markdown("---")
+    st.markdown('<div id="relatorio"></div>', unsafe_allow_html=True)
+    st.markdown("### 📊 Relatório consolidado e exportação")
+
+    simulacoes = st.session_state.get("simulacoes", [])
+    if not simulacoes:
+        st.markdown(
+            """
+            <div class="empty-state">
+                <div class="big-emoji">📭</div>
+                <div class="big-text">Nenhuma simulação executada nesta sessão</div>
+                <div class="small-text">
+                    Configure um cenário de interdição na <b>barra lateral</b> e clique em
+                    <b>Executar simulação</b>. Você pode rodar vários cenários
+                    (use o botão <b>🎲 Sortear origem/destino</b> para variar) e ao final
+                    baixar o relatório PDF aqui.
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        # Métricas agregadas
+        com_alt = sum(1 for s in simulacoes if s["tem_alt"])
+        incs = [
+            (s["dist_alt_m"] - s["dist_orig_m"]) / 1000.0
+            for s in simulacoes
+            if s["tem_alt"] and s["dist_orig_m"] > 0
+        ]
+        avg = sum(incs) / len(incs) if incs else 0.0
+        mx = max(incs) if incs else 0.0
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.markdown(
+            f'<div class="metric-card"><div class="label">Total de simulações</div>'
+            f'<div class="value">{len(simulacoes)}</div></div>',
+            unsafe_allow_html=True,
+        )
+        m2.markdown(
+            f'<div class="metric-card"><div class="label">Com rota alternativa</div>'
+            f'<div class="value">{com_alt}</div></div>',
+            unsafe_allow_html=True,
+        )
+        m3.markdown(
+            f'<div class="metric-card"><div class="label">Aumento médio</div>'
+            f'<div class="value">+{avg:.2f} km</div></div>',
+            unsafe_allow_html=True,
+        )
+        m4.markdown(
+            f'<div class="metric-card"><div class="label">Aumento máximo</div>'
+            f'<div class="value">+{mx:.2f} km</div></div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("")
+        st.markdown("**Histórico das simulações desta sessão**")
+        hist = pd.DataFrame([
+            {
+                "#": i + 1,
+                "Hora": s["timestamp"].strftime("%H:%M:%S") if hasattr(s["timestamp"], "strftime") else str(s["timestamp"]),
+                "Origem": s["origem"],
+                "Destino": s["destino"],
+                "Interditadas": len(s["interdicao"]),
+                "Modo": s["modo"],
+                "Dist. orig. (km)": round(s["dist_orig_m"] / 1000, 2) if s["dist_orig_m"] else None,
+                "Dist. alt. (km)":  round(s["dist_alt_m"]  / 1000, 2) if s["tem_alt"] else None,
+                "Var. (%)": (
+                    round((s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100, 1)
+                    if s["tem_alt"] and s["dist_orig_m"] else None
+                ),
+            }
+            for i, s in enumerate(simulacoes)
+        ])
+        st.dataframe(hist, use_container_width=True, hide_index=True, height=min(320, 50 + len(hist) * 36))
+
+        col_dl, col_clear = st.columns([3, 1])
+        try:
+            pdf_bytes = gerar_pdf_relatorio(df, simulacoes)
+            col_dl.download_button(
+                "📄 Baixar relatório completo em PDF",
+                data=pdf_bytes,
+                file_name=f"relatorio_oae_{datetime.now():%Y%m%d_%H%M%S}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+                type="primary",
+                help="Gera um PDF com resumo executivo, detalhamento de todas as simulações, "
+                     "ranking de OAEs mais críticas e metodologia.",
+            )
+        except Exception as exc:
+            col_dl.error(f"Erro ao gerar PDF: {exc}")
+
+        if col_clear.button("🧹 Limpar histórico", use_container_width=True, key="btn_clear_hist"):
+            st.session_state["simulacoes"] = []
+            st.session_state["sim_count"] = 0
+            st.rerun()
 
 
 if __name__ == "__main__":
