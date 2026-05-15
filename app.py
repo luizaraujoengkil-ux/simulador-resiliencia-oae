@@ -1254,18 +1254,24 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         origem = st.sidebar.selectbox("Origem", disponiveis, key="origem_sel")
         destino = st.sidebar.selectbox("Destino", disponiveis, key="destino_sel")
 
-        if st.sidebar.button(
+        def _sortear_od(opcoes_sortear: list[str]) -> None:
+            # Callback: roda ANTES do próximo render, então pode mexer
+            # em session_state com chaves de widgets (origem_sel / destino_sel).
+            if len(opcoes_sortear) >= 2:
+                o, d = random.sample(opcoes_sortear, 2)
+                st.session_state["origem_sel"] = o
+                st.session_state["destino_sel"] = d
+
+        st.sidebar.button(
             "🎲 Sortear origem/destino",
             use_container_width=True,
             disabled=len(disponiveis) < 2,
             help="Sorteia aleatoriamente um par origem/destino entre as OAEs não interditadas. "
                  "Útil para avaliar interferências em múltiplos cenários.",
             key="btn_random_od",
-        ):
-            o, d = random.sample(disponiveis, 2)
-            st.session_state["origem_sel"] = o
-            st.session_state["destino_sel"] = d
-            st.rerun()
+            on_click=_sortear_od,
+            args=(disponiveis,),
+        )
 
         # ---- Executar simulação + contador ----
         st.sidebar.markdown("---")
