@@ -413,6 +413,16 @@ def aplicar_estilo() -> None:
             background: rgba(143, 160, 186, 0.06);
             border-left-color: #8FA0BA;
         }
+        .filter-hint {
+            margin: -0.3rem 0 0.4rem;
+            padding: 0.4rem 0.6rem;
+            background: rgba(0, 224, 212, 0.06);
+            border-left: 2px solid #00E0D4;
+            border-radius: 4px;
+            font-size: 0.76rem;
+            color: #C8D2E6;
+        }
+        .filter-hint b { color: #F5F8FF; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -1047,23 +1057,51 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         st.sidebar.markdown("---")
         st.sidebar.subheader("Interdição")
         opcoes = df["Código OAE"].astype(str).tolist()
-        criticas = (
-            df[df["Nota Geral"].astype(float) <= 2]["Código OAE"].astype(str).tolist()
-            if "Nota Geral" in df.columns else []
-        )
+        tem_nota = "Nota Geral" in df.columns
+
+        # Filtro por Nota Geral (limite ajustável)
+        if tem_nota:
+            nota_limite = st.sidebar.slider(
+                "Filtro por Nota Geral",
+                min_value=1, max_value=5, value=2, step=1,
+                help="Seleciona OAEs com Nota Geral igual ou pior que este valor. "
+                     "1 = crítica · 5 = ótima. O botão abaixo aplica o filtro.",
+                key="nota_filtro_limite",
+            )
+            oaes_filtradas = (
+                df[df["Nota Geral"].astype(float) <= nota_limite]["Código OAE"]
+                .astype(str).tolist()
+            )
+            st.sidebar.markdown(
+                f"""
+                <div class="filter-hint">
+                    📊 Limite atual: <b>Nota ≤ {nota_limite}</b> ·
+                    <b>{len(oaes_filtradas)}</b> OAE(s) na faixa
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            nota_limite = None
+            oaes_filtradas = []
 
         # Botões de atalho — modificam o session_state antes do multiselect ser renderizado
         col_a, col_b = st.sidebar.columns(2)
         sel_atual = st.session_state.get("interdicao_select", [])
+
         if col_a.button(
-            f"⚠️ Críticas ({len(criticas)})",
+            f"📌 Aplicar filtro ({len(oaes_filtradas)})" if tem_nota else "📌 Selecionar todas",
             use_container_width=True,
-            disabled=len(criticas) == 0,
-            help="Seleciona automaticamente todas as OAEs com Nota Geral ≤ 2.",
-            key="btn_criticas",
+            disabled=(tem_nota and len(oaes_filtradas) == 0),
+            help=(
+                f"Seleciona todas as OAEs com Nota Geral ≤ {nota_limite}."
+                if tem_nota else "Seleciona todas as OAEs da base."
+            ),
+            key="btn_aplicar_filtro",
         ):
-            st.session_state["interdicao_select"] = criticas
+            st.session_state["interdicao_select"] = oaes_filtradas if tem_nota else opcoes
             st.rerun()
+
         if col_b.button(
             "🗑️ Limpar",
             use_container_width=True,
@@ -1079,7 +1117,7 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             opcoes,
             key="interdicao_select",
             placeholder="Clique e escolha uma ou mais OAEs",
-            help="Você pode selecionar quantas quiser. Cada uma será simulada como fechada.",
+            help="Use o filtro acima ou selecione manualmente. Cada OAE marcada será simulada como fechada.",
         )
 
         n_sel = len(interdicao)
