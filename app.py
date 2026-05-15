@@ -616,7 +616,10 @@ def construir_grafo_osm(centro_lat: float, centro_lon: float, raio_m: int) -> "n
         return None
     try:
         G = ox.graph_from_point((centro_lat, centro_lon), dist=raio_m, network_type="drive")
-        G = ox.add_edge_lengths(G)
+        # osmnx 2.x: add_edge_lengths foi movido para o submódulo distance
+        add_lengths = getattr(ox.distance, "add_edge_lengths", None) or getattr(ox, "add_edge_lengths", None)
+        if add_lengths is not None:
+            G = add_lengths(G)
         return G
     except Exception:
         return None
