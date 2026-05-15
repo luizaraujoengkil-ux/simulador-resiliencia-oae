@@ -80,73 +80,91 @@ COLUNAS_OPCIONAIS = ["Nota Geral", "Município / UF", "Rodovia / Trecho", "Tipo"
 # ----------------------------------------------------------------------------
 
 def aplicar_estilo() -> None:
-    """Injeta CSS para deixar o app com visual mais limpo e profissional."""
+    """Injeta CSS para deixar o app com visual mais limpo, fluido e compacto."""
     st.markdown(
         """
         <style>
+        /* ----- Container principal: paddings menores e largura limitada ----- */
+        .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 2rem !important;
+            padding-left: 1.6rem !important;
+            padding-right: 1.6rem !important;
+            max-width: 1400px;
+        }
+
+        /* ----- Tipografia geral menor para markdown ----- */
+        .stMarkdown h1 { font-size: 1.45rem; font-weight: 700; margin: 0.4rem 0 0.5rem; }
+        .stMarkdown h2 { font-size: 1.2rem;  font-weight: 700; margin: 0.4rem 0 0.45rem; }
+        .stMarkdown h3 { font-size: 1.02rem; font-weight: 600; margin: 0.6rem 0 0.4rem; }
+        .stMarkdown p, .stMarkdown li { font-size: 0.92rem; }
+
+        /* ----- Hero compacto ----- */
         .app-hero {
             background: linear-gradient(135deg, #0B2545 0%, #134074 60%, #1E6091 100%);
-            padding: 1.6rem 1.8rem;
-            border-radius: 14px;
+            padding: 0.95rem 1.25rem;
+            border-radius: 12px;
             color: #FFFFFF;
-            margin-bottom: 1.2rem;
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+            margin-bottom: 0.85rem;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
         }
         .app-hero h1 {
             margin: 0;
-            font-size: 1.9rem;
+            font-size: 1.4rem;
             font-weight: 700;
+            line-height: 1.2;
         }
         .app-hero p {
-            margin: 0.35rem 0 0 0;
-            font-size: 1.05rem;
-            opacity: 0.92;
+            margin: 0.25rem 0 0 0;
+            font-size: 0.9rem;
+            opacity: 0.9;
         }
+
+        /* ----- Step cards mais compactos ----- */
         .step-card {
-            background: rgba(16, 27, 46, 0.6);
-            border: 1px solid rgba(0, 224, 212, 0.25);
-            border-radius: 12px;
-            padding: 1rem 1.1rem;
+            background: rgba(16, 27, 46, 0.55);
+            border: 1px solid rgba(0, 224, 212, 0.22);
+            border-radius: 10px;
+            padding: 0.7rem 0.85rem;
             height: 100%;
             transition: transform 0.15s ease, border-color 0.15s ease;
         }
         .step-card:hover {
-            transform: translateY(-2px);
+            transform: translateY(-1px);
             border-color: #00E0D4;
         }
         .step-card .head {
             display: flex;
             align-items: center;
-            gap: 0.55rem;
-            margin-bottom: 0.4rem;
+            gap: 0.45rem;
+            margin-bottom: 0.35rem;
         }
         .step-card .num {
             flex-shrink: 0;
-            width: 28px;
-            height: 28px;
+            width: 20px;
+            height: 20px;
             border-radius: 50%;
             background: #00E0D4;
             color: #07111F;
             font-weight: 700;
             text-align: center;
-            line-height: 28px;
-            font-size: 0.9rem;
+            line-height: 20px;
+            font-size: 0.72rem;
         }
         .step-card .icon {
             flex-shrink: 0;
-            width: 34px;
-            height: 34px;
+            width: 26px;
+            height: 26px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border-radius: 8px;
+            border-radius: 6px;
             background: rgba(0, 224, 212, 0.12);
-            border: 1px solid rgba(0, 224, 212, 0.35);
-            color: #00E0D4;
+            border: 1px solid rgba(0, 224, 212, 0.32);
         }
         .step-card .icon svg {
-            width: 18px;
-            height: 18px;
+            width: 14px;
+            height: 14px;
             stroke: #00E0D4;
             stroke-width: 2;
             fill: none;
@@ -155,51 +173,72 @@ def aplicar_estilo() -> None:
         }
         .step-card .title {
             margin: 0;
-            font-size: 1rem;
+            font-size: 0.86rem;
             font-weight: 700;
             color: #FFFFFF;
             line-height: 1.2;
         }
         .step-card p {
             margin: 0;
-            font-size: 0.9rem;
-            opacity: 0.85;
+            font-size: 0.78rem;
+            opacity: 0.82;
+            line-height: 1.35;
         }
+
+        /* ----- Métricas ----- */
         .metric-card {
             background: #101B2E;
-            border-radius: 12px;
-            padding: 0.9rem 1rem;
-            border-left: 4px solid #00E0D4;
+            border-radius: 10px;
+            padding: 0.65rem 0.85rem;
+            border-left: 3px solid #00E0D4;
         }
         .metric-card .label {
-            font-size: 0.78rem;
+            font-size: 0.68rem;
             color: #A8B3C7;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
         .metric-card .value {
-            font-size: 1.5rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: #FFFFFF;
-            margin-top: 0.2rem;
+            margin-top: 0.15rem;
         }
         .status-ok { color: #16C172; font-weight: 700; }
         .status-warn { color: #F4A261; font-weight: 700; }
         .status-fail { color: #E63946; font-weight: 700; }
+
+        /* ----- Botões ----- */
         .stButton > button {
             background: linear-gradient(90deg, #00E0D4, #1E6091);
             color: #07111F;
             font-weight: 700;
             border-radius: 8px;
             border: none;
-            padding: 0.55rem 1.1rem;
+            padding: 0.45rem 1rem;
+            font-size: 0.88rem;
         }
         .stButton > button:hover {
             filter: brightness(1.08);
             color: #07111F;
         }
+
+        /* ----- Sidebar mais enxuta ----- */
+        section[data-testid="stSidebar"] .block-container {
+            padding-top: 1rem !important;
+        }
+        section[data-testid="stSidebar"] h1,
+        section[data-testid="stSidebar"] h2 { font-size: 1rem; margin-bottom: 0.45rem; }
+        section[data-testid="stSidebar"] h3 { font-size: 0.9rem; margin: 0.6rem 0 0.3rem; }
+        section[data-testid="stSidebar"] .stMarkdown p,
+        section[data-testid="stSidebar"] label { font-size: 0.84rem; }
+
+        /* ----- Espaçamento entre blocos um pouco menor ----- */
+        [data-testid="stVerticalBlock"] { gap: 0.5rem; }
+
+        /* ----- Notas auxiliares ----- */
         .small-note {
-            font-size: 0.85rem;
+            font-size: 0.82rem;
             opacity: 0.8;
         }
         </style>
