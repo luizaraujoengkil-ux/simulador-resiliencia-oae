@@ -99,90 +99,172 @@ def aplicar_estilo() -> None:
         .stMarkdown h3 { font-size: 1.02rem; font-weight: 600; margin: 0.6rem 0 0.4rem; }
         .stMarkdown p, .stMarkdown li { font-size: 0.92rem; }
 
-        /* ----- Hero compacto ----- */
+        /* ----- Hero técnico (estilo painel de engenharia) ----- */
         .app-hero {
-            background: linear-gradient(135deg, #0B2545 0%, #134074 60%, #1E6091 100%);
-            padding: 0.95rem 1.25rem;
-            border-radius: 12px;
+            background: #0E1A2F;
+            border: 1px solid #1E2C45;
+            border-top: 2px solid #00E0D4;
+            padding: 0.7rem 1rem;
+            border-radius: 3px;
             color: #FFFFFF;
-            margin-bottom: 0.85rem;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+            margin-bottom: 0.7rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+        }
+        .app-hero .brand {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            min-width: 0;
+        }
+        .app-hero .mark {
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(0, 224, 212, 0.5);
+            background: rgba(0, 224, 212, 0.08);
+            border-radius: 3px;
+            flex-shrink: 0;
+        }
+        .app-hero .mark svg {
+            width: 18px;
+            height: 18px;
+            stroke: #00E0D4;
+            stroke-width: 1.8;
+            fill: none;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .app-hero .titlebar {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
         }
         .app-hero h1 {
             margin: 0;
-            font-size: 1.4rem;
+            font-size: 1rem;
             font-weight: 700;
-            line-height: 1.2;
+            line-height: 1.15;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: #FFFFFF;
         }
-        .app-hero p {
-            margin: 0.25rem 0 0 0;
-            font-size: 0.9rem;
-            opacity: 0.9;
+        .app-hero .subtitle {
+            margin: 0.15rem 0 0;
+            font-size: 0.74rem;
+            color: #8FA0BA;
+            letter-spacing: 0.02em;
+        }
+        .app-hero .meta {
+            display: flex;
+            gap: 0.4rem;
+            align-items: center;
+            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
+            font-size: 0.66rem;
+            color: #8FA0BA;
+            flex-shrink: 0;
+        }
+        .app-hero .pill {
+            background: rgba(0, 224, 212, 0.1);
+            border: 1px solid rgba(0, 224, 212, 0.4);
+            color: #00E0D4;
+            padding: 0.18rem 0.5rem;
+            border-radius: 2px;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            font-weight: 700;
+        }
+        .app-hero .pill.muted {
+            background: rgba(143, 160, 186, 0.08);
+            border-color: rgba(143, 160, 186, 0.35);
+            color: #8FA0BA;
+        }
+        .app-hero .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #16C172;
+            box-shadow: 0 0 0 2px rgba(22, 193, 114, 0.18);
         }
 
-        /* ----- Step cards mais compactos ----- */
+        /* ----- Step cards estilo "pipeline" técnico ----- */
         .step-card {
-            background: rgba(16, 27, 46, 0.55);
-            border: 1px solid rgba(0, 224, 212, 0.22);
-            border-radius: 10px;
-            padding: 0.7rem 0.85rem;
+            background: #0E1A2F;
+            border: 1px solid #1E2C45;
+            border-left: 2px solid #00E0D4;
+            border-radius: 3px;
+            padding: 0.6rem 0.8rem;
             height: 100%;
-            transition: transform 0.15s ease, border-color 0.15s ease;
+            transition: border-color 0.15s ease, background 0.15s ease;
+            position: relative;
         }
         .step-card:hover {
-            transform: translateY(-1px);
-            border-color: #00E0D4;
+            border-color: #2A3B5C;
+            border-left-color: #00E0D4;
+            background: #11203A;
+        }
+        .step-card .step-label {
+            display: flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-family: 'JetBrains Mono', 'Consolas', 'Cascadia Mono', monospace;
+            font-size: 0.62rem;
+            color: #8FA0BA;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            margin-bottom: 0.35rem;
+        }
+        .step-card .step-label .num {
+            color: #00E0D4;
+            font-weight: 700;
+        }
+        .step-card .step-label .sep {
+            color: #2A3B5C;
         }
         .step-card .head {
             display: flex;
             align-items: center;
             gap: 0.45rem;
-            margin-bottom: 0.35rem;
-        }
-        .step-card .num {
-            flex-shrink: 0;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            background: #00E0D4;
-            color: #07111F;
-            font-weight: 700;
-            text-align: center;
-            line-height: 20px;
-            font-size: 0.72rem;
+            margin-bottom: 0.3rem;
         }
         .step-card .icon {
             flex-shrink: 0;
-            width: 26px;
-            height: 26px;
+            width: 22px;
+            height: 22px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            border-radius: 6px;
-            background: rgba(0, 224, 212, 0.12);
+            border-radius: 3px;
+            background: rgba(0, 224, 212, 0.1);
             border: 1px solid rgba(0, 224, 212, 0.32);
         }
         .step-card .icon svg {
-            width: 14px;
-            height: 14px;
+            width: 13px;
+            height: 13px;
             stroke: #00E0D4;
-            stroke-width: 2;
+            stroke-width: 1.8;
             fill: none;
             stroke-linecap: round;
             stroke-linejoin: round;
         }
         .step-card .title {
             margin: 0;
-            font-size: 0.86rem;
+            font-size: 0.78rem;
             font-weight: 700;
             color: #FFFFFF;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
             line-height: 1.2;
         }
         .step-card p {
             margin: 0;
-            font-size: 0.78rem;
-            opacity: 0.82;
-            line-height: 1.35;
+            font-size: 0.76rem;
+            color: #B0BCD0;
+            line-height: 1.4;
         }
 
         /* ----- Métricas ----- */
@@ -247,12 +329,33 @@ def aplicar_estilo() -> None:
     )
 
 
+APP_VERSAO = "v0.1"
+APP_MODULO = "OAE-SIM"
+
+
 def cabecalho() -> None:
+    mark_svg = (
+        '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        '<path d="M4 20 L12 4 L20 20"/>'
+        '<path d="M8 13 L12 13"/>'
+        '<path d="M10 17 L14 17"/>'
+        '</svg>'
+    )
     st.markdown(
         f"""
         <div class="app-hero">
-            <h1>🛣️ {APP_TITLE}</h1>
-            <p>{APP_SUBTITLE}</p>
+            <div class="brand">
+                <span class="mark">{mark_svg}</span>
+                <div class="titlebar">
+                    <h1>{APP_TITLE}</h1>
+                    <span class="subtitle">{APP_SUBTITLE}</span>
+                </div>
+            </div>
+            <div class="meta">
+                <span class="pill muted">MÓDULO · {APP_MODULO}</span>
+                <span class="pill">{APP_VERSAO}</span>
+                <span class="dot" title="Sistema operacional"></span>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -286,22 +389,29 @@ ICONE_IMPACTO = (
 
 def cards_explicativos() -> None:
     etapas = [
-        ("1", ICONE_PASTA, "Carregar base de OAEs",
-         "Faça upload de CSV, XLSX, KML ou KMZ — ou use a base de demonstração."),
-        ("2", ICONE_MAPA, "Visualizar mapa de criticidade",
-         "Veja todas as OAEs no mapa, coloridas pela Nota Geral."),
-        ("3", ICONE_INTERDICAO, "Selecionar OAE(s) interditada(s)",
-         "Escolha quais obras estão fechadas e defina origem/destino."),
-        ("4", ICONE_IMPACTO, "Calcular impacto na rede",
-         "Compare rota original vs. alternativa e veja indicadores."),
+        ("01", ICONE_PASTA, "Importar dados", "Entrada",
+         "Upload de CSV, XLSX, KML ou KMZ — ou base de demonstração."),
+        ("02", ICONE_MAPA, "Inventário em mapa", "Visualização",
+         "OAEs georreferenciadas e coloridas pela Nota Geral."),
+        ("03", ICONE_INTERDICAO, "Cenário de interdição", "Configuração",
+         "Defina obras fora de serviço e o par origem/destino analisado."),
+        ("04", ICONE_IMPACTO, "Impacto na rede", "Análise",
+         "Rota base × rota alternativa e indicadores de desempenho."),
     ]
-    cols = st.columns(4)
-    for col, (num, icone, titulo, texto) in zip(cols, etapas):
+    total = len(etapas)
+    cols = st.columns(total)
+    for col, (num, icone, titulo, categoria, texto) in zip(cols, etapas):
         col.markdown(
             f"""
             <div class="step-card">
+                <div class="step-label">
+                    <span class="num">ETAPA {num}</span>
+                    <span class="sep">/</span>
+                    <span>{total:02d}</span>
+                    <span class="sep">·</span>
+                    <span>{categoria}</span>
+                </div>
                 <div class="head">
-                    <span class="num">{num}</span>
                     <span class="icon">{icone}</span>
                     <span class="title">{titulo}</span>
                 </div>
