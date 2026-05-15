@@ -833,11 +833,13 @@ def desenhar_mapa(
     df: pd.DataFrame,
     rotas: list[dict] | None = None,
     interditadas: Iterable[str] | None = None,
+    malha: dict | None = None,
     titulo: str | None = None,
 ) -> folium.Map:
-    """Cria um folium.Map com as OAEs e, opcionalmente, rotas sobrepostas.
+    """Cria um folium.Map com as OAEs, malha viária (opcional) e rotas (opcional).
 
-    rotas: lista de dicts com {"coords": [(lat,lon),...], "color": str, "label": str}.
+    rotas: lista de {"coords": [(lat,lon),...], "color": str, "label": str, "weight": int, "dash_array": str}.
+    malha: GeoJSON FeatureCollection com a malha viária (LineStrings em [lon,lat]).
     """
     if df.empty:
         return folium.Map(location=[-15.78, -47.93], zoom_start=4, control_scale=True)
@@ -853,6 +855,18 @@ def desenhar_mapa(
         title_cancel="Sair da tela cheia",
         force_separate_button=True,
     ).add_to(m)
+
+    # Malha viária (fundo azul fino) — renderizada PRIMEIRO para ficar atrás de tudo
+    if malha and malha.get("features"):
+        folium.GeoJson(
+            malha,
+            name="Malha viária",
+            style_function=lambda x: {
+                "color": "#1E88E5",
+                "weight": 1.4,
+                "opacity": 0.45,
+            },
+        ).add_to(m)
 
     if titulo:
         folium.map.Marker(
@@ -906,19 +920,37 @@ def desenhar_mapa(
             coords = rota.get("coords") or []
             if len(coords) < 2:
                 continue
-            folium.PolyLine(
-                coords,
+            pl_kwargs = dict(
                 color=rota.get("color", "#1E6091"),
                 weight=rota.get("weight", 5),
-                opacity=0.85,
+                opacity=rota.get("opacity", 0.9),
                 tooltip=rota.get("label", "Rota"),
-            ).add_to(m)
+            )
+            if rota.get("dash_array"):
+                pl_kwargs["dash_array"] = rota["dash_array"]
+            folium.PolyLine(coords, **pl_kwargs).add_to(m)
 
-    # Legenda
-    legenda = """
+    # Legenda — inclui malha e rotas se houver
+    blocos_extra = ""
+    if malha and malha.get("features"):
+        blocos_extra += '<hr style="margin:6px 0;border:none;border-top:1px solid #DDD;">'
+        blocos_extra += '<b>Rede / rotas</b><br>'
+        blocos_extra += '<span style="color:#1E88E5;">━</span> Malha viária<br>'
+    if rotas:
+        if not blocos_extra:
+            blocos_extra += '<hr style="margin:6px 0;border:none;border-top:1px solid #DDD;">'
+            blocos_extra += '<b>Rotas</b><br>'
+        for rota in rotas:
+            cor = rota.get("color", "#1E6091")
+            label = rota.get("label", "Rota")
+            stroke = "┄ ┄" if rota.get("dash_array") else "━"
+            blocos_extra += f'<span style="color:{cor};">{stroke}</span> {label}<br>'
+
+    legenda = f"""
     <div style="position: fixed; bottom: 30px; left: 30px; z-index:9999;
                 background:#FFFFFF; padding:8px 12px; border-radius:8px;
-                box-shadow:0 2px 8px rgba(0,0,0,0.25); color:#0B2545; font-size:12px;">
+                box-shadow:0 2px 8px rgba(0,0,0,0.25); color:#0B2545; font-size:12px;
+                max-width: 230px;">
       <b>Criticidade (Nota Geral)</b><br>
       <span style="color:#8B0000;">●</span> 1 — Crítica<br>
       <span style="color:#E63946;">●</span> 2 — Ruim<br>
@@ -927,10 +959,39 @@ def desenhar_mapa(
       <span style="color:#2ECC71;">●</span> 5 — Ótima<br>
       <span style="color:#9AA0A6;">●</span> Sem nota<br>
       ⛔ Interditada
+      {blocos_extra}
     </div>
     """
     m.get_root().html.add_child(folium.Element(legenda))
     return m
+
+
+def _extrair_malha_geojson(G) -> dict:
+    """Extrai todas as arestas do grafo OSM como FeatureCollection GeoJSON."""
+    features = []
+    for u, v, data in G.edges(data=True):
+        geom = data.get("geometry")
+        if geom is not None:
+            try:
+                # shapely LineString: coords são (x, y) = (lon, lat) — formato GeoJSON
+                coords = [list(c) for c in geom.coords]
+            except Exception:
+                continue
+        else:
+            try:
+                coords = [
+                    [G.nodes[u]["x"], G.nodes[u]["y"]],
+                    [G.nodes[v]["x"], G.nodes[v]["y"]],
+                ]
+            except KeyError:
+                continue
+        if len(coords) >= 2:
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "LineString", "coordinates": coords},
+                "properties": {},
+            })
+    return {"type": "FeatureCollection", "features": features}
 
 
 # ----------------------------------------------------------------------------
@@ -1326,11 +1387,15 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     interdicao = opcoes["interdicao"] or []
 
     if origem_cod == destino_cod:
-        st.warning("Selecione OAEs diferentes para origem e destino.")
+        st.warning("⚠️ Selecione OAEs **diferentes** para origem e destino.")
         return None
 
-    o_lat, o_lon = obter_ponto(df, origem_cod)
-    d_lat, d_lon = obter_ponto(df, destino_cod)
+    try:
+        o_lat, o_lon = obter_ponto(df, origem_cod)
+        d_lat, d_lon = obter_ponto(df, destino_cod)
+    except (KeyError, IndexError) as exc:
+        st.error(f"❌ Não consegui localizar a OAE de origem/destino na base: {exc}")
+        return None
 
     modo_forcado_simples = opcoes["modo_rede"].startswith("Forçar")
     coords_orig: list[tuple[float, float]] = []
@@ -1338,36 +1403,79 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     dist_orig = dist_alt = 0.0
     modo_usado = "simplificado"
     G_osm = None
+    malha_geojson = None
 
-    if not modo_forcado_simples:
-        centro_lat = float(df["Latitude"].mean())
-        centro_lon = float(df["Longitude"].mean())
-        with st.spinner("Baixando rede viária via OpenStreetMap..."):
-            G_osm = construir_grafo_osm(centro_lat, centro_lon, opcoes["raio_km"] * 1000)
+    with st.status("⏳ Executando simulação...", expanded=True) as status:
+        try:
+            # ----- Etapa 1: rede viária -----
+            if modo_forcado_simples:
+                st.write("• Modo simplificado **forçado** pelo usuário — pulando OSM.")
+            else:
+                st.write("• Baixando rede viária do OpenStreetMap...")
+                centro_lat = float(df["Latitude"].mean())
+                centro_lon = float(df["Longitude"].mean())
+                G_osm = construir_grafo_osm(centro_lat, centro_lon, opcoes["raio_km"] * 1000)
+                if G_osm is not None:
+                    st.write(f"  ✓ Rede OSM carregada ({G_osm.number_of_nodes()} nós, {G_osm.number_of_edges()} vias).")
+                else:
+                    st.write("  ✗ OSM indisponível — caindo para o modo simplificado.")
 
-    if G_osm is not None:
-        # Mapeia OAEs interditadas para nós do grafo
-        nos_remover: set[int] = set()
-        for cod in interdicao:
-            lat, lon = obter_ponto(df, cod)
-            no = _no_mais_proximo(G_osm, lat, lon)
-            if no is not None:
-                nos_remover.add(no)
+            # ----- Etapa 2: rotas -----
+            if G_osm is not None:
+                st.write("• Mapeando OAEs interditadas para nós do grafo...")
+                nos_remover: set[int] = set()
+                for cod in interdicao:
+                    lat, lon = obter_ponto(df, cod)
+                    no = _no_mais_proximo(G_osm, lat, lon)
+                    if no is not None:
+                        nos_remover.add(no)
+                st.write(f"  ✓ {len(nos_remover)} nó(s) marcado(s) para remoção.")
 
-        coords_orig, dist_orig = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon))
-        coords_alt, dist_alt = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon), nos_remover)
-        modo_usado = "OSM"
+                st.write("• Calculando rota base (sem interdição)...")
+                coords_orig, dist_orig = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon))
+                st.write("• Calculando rota alternativa (com interdição)...")
+                coords_alt, dist_alt = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon), nos_remover)
 
-    if modo_usado != "OSM":
-        if not modo_forcado_simples:
-            st.info("⚠️ Modo simplificado ativado para demonstração (OSM indisponível).")
-        else:
-            st.info("Modo simplificado em uso (forçado pelo usuário).")
-        G_simp = construir_grafo_simplificado(df, k_vizinhos=3)
-        coords_orig, dist_orig = calcular_rota_simplificada(G_simp, origem_cod, destino_cod)
-        coords_alt, dist_alt = calcular_rota_simplificada(G_simp, origem_cod, destino_cod, set(map(str, interdicao)))
+                st.write("• Extraindo malha viária para visualização...")
+                malha_geojson = _extrair_malha_geojson(G_osm)
+                st.write(f"  ✓ Malha com {len(malha_geojson.get('features', []))} segmentos.")
+                modo_usado = "OSM"
+            else:
+                G_simp = construir_grafo_simplificado(df, k_vizinhos=3)
+                st.write("• Calculando rotas no grafo simplificado...")
+                coords_orig, dist_orig = calcular_rota_simplificada(G_simp, origem_cod, destino_cod)
+                coords_alt, dist_alt = calcular_rota_simplificada(
+                    G_simp, origem_cod, destino_cod, set(map(str, interdicao))
+                )
 
-    tem_alt = len(coords_alt) >= 2
+            tem_alt = len(coords_alt) >= 2
+            tem_orig = len(coords_orig) >= 2
+
+            if not tem_orig and not tem_alt:
+                status.update(label="❌ Nenhuma rota pôde ser calculada", state="error")
+                st.error(
+                    "Não foi possível calcular nenhuma rota — origem/destino podem estar "
+                    "fora da área baixada do OSM. Tente aumentar o **Raio (km)** na sidebar "
+                    "ou use o modo simplificado."
+                )
+                return None
+
+            status.update(
+                label=f"✓ Simulação concluída ({modo_usado})" + (
+                    "" if tem_alt else " — sem rota alternativa"
+                ),
+                state="complete",
+                expanded=False,
+            )
+        except Exception as exc:
+            status.update(label="❌ Erro durante a simulação", state="error")
+            st.error(f"Erro inesperado: `{type(exc).__name__}: {exc}`")
+            return None
+
+    if tem_alt:
+        st.toast(f"✅ Simulação OK · modo {modo_usado}", icon="✅")
+    else:
+        st.toast("⚠️ Sem rota alternativa — todas as interditadas bloqueiam o par OD", icon="⚠️")
 
     cards_indicadores(
         total=len(df),
@@ -1379,13 +1487,30 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
 
     st.markdown("### 🗺️ Comparativo de rotas")
     rotas = []
-    if len(coords_orig) >= 2:
-        rotas.append({"coords": coords_orig, "color": "#1E6091", "label": "Rota original", "weight": 5})
+    if tem_orig:
+        rotas.append({
+            "coords": coords_orig,
+            "color": "#E63946",  # vermelho — rota afetada pela interdição
+            "label": "Rota original (afetada pela interdição)",
+            "weight": 5,
+            "dash_array": "10, 6",  # tracejada
+        })
     if tem_alt:
-        rotas.append({"coords": coords_alt, "color": "#E63946", "label": "Rota alternativa", "weight": 5})
+        rotas.append({
+            "coords": coords_alt,
+            "color": "#22C55E",  # verde — nova rota proposta
+            "label": "Rota alternativa (proposta)",
+            "weight": 6,
+            "opacity": 0.95,
+        })
 
-    mapa = desenhar_mapa(df, rotas=rotas, interditadas=interdicao, titulo=None)
-    # Marca origem e destino
+    mapa = desenhar_mapa(
+        df,
+        rotas=rotas,
+        interditadas=interdicao,
+        malha=malha_geojson,
+        titulo=None,
+    )
     folium.Marker(
         [o_lat, o_lon],
         tooltip=f"Origem: {origem_cod}",
@@ -1399,8 +1524,10 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     st_folium(mapa, width=None, height=560, returned_objects=[])
 
     st.caption(
-        f"Modo de cálculo utilizado: **{modo_usado}**. "
-        "Azul = rota original; vermelho = rota alternativa após interdição."
+        f"**Modo de cálculo:** {modo_usado}  ·  "
+        "🔵 **Malha viária** (rede OSM)  ·  "
+        "🔴 **Rota original** afetada pela interdição (tracejada)  ·  "
+        "🟢 **Rota alternativa** proposta."
     )
 
     return {
