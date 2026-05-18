@@ -687,8 +687,50 @@ def _ler_xlsx(buf: bytes) -> pd.DataFrame:
     return pd.read_excel(io.BytesIO(buf))
 
 
+# Cores de referência (RGB) usadas no Google Earth para criticidade — mapeadas para Nota Geral
+_CORES_REFERENCIA_NOTA = {
+    1: (255,   0,   0),  # vermelho puro
+    2: (255,  85, 127),  # rosa
+    3: (255, 170,   0),  # laranja
+    4: (255, 255, 127),  # amarelo claro
+    5: ( 85, 255, 127),  # verde claro
+}
+
+
+def _kml_color_para_rgb(kml_color: str) -> tuple[int, int, int] | None:
+    """Converte cor KML (AABBGGRR, 8 hex chars) em tupla RGB."""
+    c = (kml_color or "").strip().lower()
+    if len(c) != 8:
+        return None
+    try:
+        b = int(c[2:4], 16)
+        g = int(c[4:6], 16)
+        r = int(c[6:8], 16)
+        return (r, g, b)
+    except ValueError:
+        return None
+
+
+def _rgb_para_nota(rgb: tuple[int, int, int] | None) -> float | None:
+    """Mapeia RGB para Nota Geral (1-5) pela cor de referência mais próxima."""
+    if rgb is None:
+        return None
+    melhor_nota = None
+    melhor_dist = float("inf")
+    for nota, ref in _CORES_REFERENCIA_NOTA.items():
+        d = sum((a - b) ** 2 for a, b in zip(rgb, ref))
+        if d < melhor_dist:
+            melhor_dist = d
+            melhor_nota = nota
+    return float(melhor_nota) if melhor_nota is not None else None
+
+
 def _parse_kml_bytes(kml_bytes: bytes) -> pd.DataFrame:
-    """Faz parse de KML puro extraindo Placemarks com Point coordinates."""
+    """Faz parse de KML puro extraindo Placemarks com Point coordinates.
+
+    Também extrai a cor do IconStyle de cada Placemark (resolvendo StyleMap)
+    e mapeia para Nota Geral conforme as cores-padrão usadas no Google Earth.
+    """
     try:
         texto = kml_bytes.decode("utf-8", errors="replace")
     except Exception:
@@ -698,7 +740,6 @@ def _parse_kml_bytes(kml_bytes: bytes) -> pd.DataFrame:
     try:
         root = ET.fromstring(texto)
     except ET.ParseError:
-        # tenta limpar prólogo problemático
         idx = texto.find("<kml")
         if idx > 0:
             texto = texto[idx:]
@@ -708,6 +749,50 @@ def _parse_kml_bytes(kml_bytes: bytes) -> pd.DataFrame:
         if "}" in el.tag:
             el.tag = el.tag.split("}", 1)[1]
 
+    # ----- 1) Mapa de Style.id -> cor RGB (extraída do IconStyle/color) -----
+    style_cores: dict[str, tuple[int, int, int]] = {}
+    for style in root.iter("Style"):
+        style_id = style.attrib.get("id", "")
+        if not style_id:
+            continue
+        icon_style = style.find("IconStyle")
+        if icon_style is None:
+            continue
+        color_el = icon_style.find("color")
+        if color_el is None or not color_el.text:
+            continue
+        rgb = _kml_color_para_rgb(color_el.text)
+        if rgb:
+            style_cores[style_id] = rgb
+
+    # ----- 2) Mapa de StyleMap.id -> Style.id (chave "normal") -----
+    stylemap_to_style: dict[str, str] = {}
+    for sm in root.iter("StyleMap"):
+        sm_id = sm.attrib.get("id", "")
+        if not sm_id:
+            continue
+        for pair in sm.iter("Pair"):
+            key_el = pair.find("key")
+            url_el = pair.find("styleUrl")
+            if (
+                key_el is not None and (key_el.text or "").strip() == "normal"
+                and url_el is not None and (url_el.text or "").strip()
+            ):
+                ref = url_el.text.strip().lstrip("#")
+                stylemap_to_style[sm_id] = ref
+                break
+
+    def _resolve_cor(style_url_raw: str) -> tuple[int, int, int] | None:
+        ref = (style_url_raw or "").strip().lstrip("#")
+        if not ref:
+            return None
+        if ref in style_cores:
+            return style_cores[ref]
+        if ref in stylemap_to_style:
+            return style_cores.get(stylemap_to_style[ref])
+        return None
+
+    # ----- 3) Placemarks -----
     registros = []
     for pm in root.iter("Placemark"):
         nome_el = pm.find("name")
@@ -715,7 +800,7 @@ def _parse_kml_bytes(kml_bytes: bytes) -> pd.DataFrame:
         desc_el = pm.find("description")
         descricao = desc_el.text.strip() if desc_el is not None and desc_el.text else ""
 
-        # ExtendedData → dict
+        # ExtendedData
         extras: dict[str, str] = {}
         for data in pm.iter("Data"):
             nome_attr = data.attrib.get("name", "")
@@ -727,7 +812,21 @@ def _parse_kml_bytes(kml_bytes: bytes) -> pd.DataFrame:
             if nome_attr and sd.text:
                 extras[nome_attr.strip()] = sd.text.strip()
 
-        # Procura coordenadas em Point (pode ter MultiGeometry)
+        # Cor: a) styleUrl referenciado; b) IconStyle inline
+        rgb = None
+        style_url_el = pm.find("styleUrl")
+        if style_url_el is not None and style_url_el.text:
+            rgb = _resolve_cor(style_url_el.text)
+        if rgb is None:
+            for inline in pm.iter("IconStyle"):
+                color_el = inline.find("color")
+                if color_el is not None and color_el.text:
+                    rgb = _kml_color_para_rgb(color_el.text)
+                    if rgb:
+                        break
+
+        nota_da_cor = _rgb_para_nota(rgb)
+
         for ponto in pm.iter("Point"):
             coords_el = ponto.find("coordinates")
             if coords_el is None or not coords_el.text:
@@ -747,6 +846,8 @@ def _parse_kml_bytes(kml_bytes: bytes) -> pd.DataFrame:
                     "Longitude": lon,
                     "Descrição": descricao,
                 }
+                if nota_da_cor is not None:
+                    registro["Nota Geral"] = nota_da_cor
                 registro.update(extras)
                 registros.append(registro)
 
@@ -1221,9 +1322,12 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
 
     usar_demo = st.sidebar.toggle("Usar base de demonstração", value=True, help="Carrega sample_data/oae_teste.csv")
     arquivo = st.sidebar.file_uploader(
-        "Carregar arquivo",
+        "Carregar arquivo(s)",
         type=["csv", "xlsx", "xls", "kml", "kmz"],
-        help="Formatos aceitos: CSV, XLSX, KML, KMZ. Aceita variações de nomes de colunas.",
+        help="Formatos: CSV, XLSX, KML, KMZ. Pode selecionar vários arquivos ao mesmo tempo "
+             "— eles são consolidados em uma única base. KMZs com cor de ícone são "
+             "convertidos para Nota Geral 1-5 automaticamente.",
+        accept_multiple_files=True,
     )
     st.sidebar.markdown(
         """
@@ -1826,10 +1930,27 @@ def main() -> None:
 
     # Decide qual base usar
     df_novo: pd.DataFrame = pd.DataFrame()
-    if opcoes["arquivo"] is not None:
-        df_novo = carregar_arquivo(opcoes["arquivo"])
-        if not df_novo.empty:
-            st.sidebar.success(f"Arquivo carregado: {len(df_novo)} OAEs")
+    arquivos = opcoes["arquivo"]
+    if arquivos:
+        # st.file_uploader com accept_multiple_files=True devolve lista; sem flag, um objeto.
+        if not isinstance(arquivos, list):
+            arquivos = [arquivos]
+        partes = []
+        for a in arquivos:
+            d = carregar_arquivo(a)
+            if not d.empty:
+                partes.append(d)
+        if partes:
+            df_novo = pd.concat(partes, ignore_index=True)
+            if df_novo["Código OAE"].duplicated().any():
+                df_novo["Código OAE"] = (
+                    df_novo["Código OAE"].astype(str)
+                    + "_" + df_novo.groupby("Código OAE").cumcount().astype(str)
+                )
+                df_novo["Código OAE"] = df_novo["Código OAE"].str.replace(r"_0$", "", regex=True)
+            st.sidebar.success(
+                f"✓ {len(arquivos)} arquivo(s) consolidados — total: {len(df_novo)} OAEs"
+            )
     elif opcoes["usar_demo"]:
         if SAMPLE_DATA_PATH.exists():
             df_novo = carregar_arquivo(SAMPLE_DATA_PATH)
