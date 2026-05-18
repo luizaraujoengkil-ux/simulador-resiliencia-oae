@@ -1247,15 +1247,16 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     buffer_km = st.sidebar.slider(
         "Buffer (km) ao redor da área de interesse",
         1, 10, value=2,
-        help="O raio do download da malha é calculado automaticamente para cobrir "
-             "as OAEs interditadas + origem + destino. Este valor adiciona contexto "
+        help="No mapa geral o raio é calculado a partir do centroide das OAEs interditadas. "
+             "Na simulação inclui também origem + destino. Este buffer adiciona contexto "
              "ao redor (recomendado: 2-5 km).",
     )
     st.sidebar.markdown(
         """
         <div class="slider-hint">
-            ℹ️ <b>Raio automático:</b> calculado da triangulação das OAEs interditadas + origem/destino.
-            Este buffer só adiciona contexto extra ao redor.
+            ℹ️ <b>Raio automático:</b><br>
+            • <b>Mapa geral:</b> centroide das OAEs interditadas + buffer<br>
+            • <b>Simulação:</b> interditadas + origem/destino + buffer
         </div>
         """,
         unsafe_allow_html=True,
@@ -1264,7 +1265,7 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     mostrar_malha = st.sidebar.toggle(
         "🌐 Mostrar malha viária no mapa geral",
         value=False,
-        help="Baixa a rede viária do OSM ao redor das OAEs interditadas e desenha "
+        help="Baixa a rede viária do OSM centrada nas OAEs interditadas e desenha "
              "por cima do mapa de criticidade. Só funciona após selecionar interdição. "
              "A 1ª ativação demora alguns segundos (depois fica em cache).",
     )
@@ -1878,12 +1879,14 @@ def main() -> None:
         if not interdicao_atual:
             st.info(
                 "ℹ️ **Selecione ao menos uma OAE interditada na sidebar** para carregar a malha viária. "
-                "O raio é calculado automaticamente a partir das OAEs interditadas + origem/destino + buffer."
+                "O raio é calculado automaticamente a partir do centroide **das OAEs interditadas** "
+                "(origem/destino não entram no cálculo do mapa geral)."
             )
         else:
+            # Mapa geral: área SÓ das interditadas (origem/destino NÃO entram)
             area = _area_de_interesse(
-                df, interdicao_atual, opcoes.get("origem"), opcoes.get("destino"),
-                opcoes.get("buffer_km", 2),
+                df, interdicao_atual, origem=None, destino=None,
+                buffer_km=opcoes.get("buffer_km", 2),
             )
             if area is None:
                 st.warning("⚠️ Não foi possível calcular a área a partir das OAEs selecionadas.")
@@ -1896,11 +1899,16 @@ def main() -> None:
                     G_geral = construir_grafo_osm(centro_lat, centro_lon, raio_m)
                 if G_geral is not None:
                     malha_geral = _extrair_malha_geojson(G_geral)
+                    n_int = len(interdicao_atual)
+                    triang = (
+                        f"centroide da OAE interditada + buffer {opcoes.get('buffer_km', 2)} km"
+                        if n_int == 1 else
+                        f"triangulação das {n_int} OAEs interditadas + buffer {opcoes.get('buffer_km', 2)} km"
+                    )
                     st.caption(
                         f"🌐 Malha OSM: **{G_geral.number_of_nodes()} nós · "
                         f"{G_geral.number_of_edges()} vias** em **raio {raio_m/1000:.2f} km** "
-                        f"(centroide das {len(interdicao_atual)} OAE(s) interditada(s) + OD + buffer "
-                        f"{opcoes.get('buffer_km', 2)} km)."
+                        f"({triang})."
                     )
                 else:
                     st.warning(
