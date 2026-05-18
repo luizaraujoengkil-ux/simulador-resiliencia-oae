@@ -39,6 +39,7 @@ from streamlit_folium import st_folium
 APP_TITLE = "Simulador de Resiliência da Rede Viária"
 APP_SUBTITLE = "Análise de interdição de OAEs críticas e rotas alternativas"
 SAMPLE_DATA_PATH = Path(__file__).parent / "sample_data" / "oae_teste.csv"
+DATA_DIR = Path(__file__).parent / "data"
 
 COLUNA_PADRAO = {
     "codigo": "Código OAE",
@@ -1320,15 +1321,49 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     """Renderiza a sidebar e devolve as escolhas do usuário."""
     st.sidebar.header("⚙️ Controles")
 
-    usar_demo = st.sidebar.toggle("Usar base de demonstração", value=True, help="Carrega sample_data/oae_teste.csv")
-    arquivo = st.sidebar.file_uploader(
-        "Carregar arquivo(s)",
-        type=["csv", "xlsx", "xls", "kml", "kmz"],
-        help="Formatos: CSV, XLSX, KML, KMZ. Pode selecionar vários arquivos ao mesmo tempo "
-             "— eles são consolidados em uma única base. KMZs com cor de ícone são "
-             "convertidos para Nota Geral 1-5 automaticamente.",
-        accept_multiple_files=True,
+    # Detecta arquivos disponíveis na pasta data/ (já comitados no repositório)
+    arquivos_locais = []
+    if DATA_DIR.exists():
+        for ext in ("*.kmz", "*.kml", "*.csv", "*.xlsx", "*.xls"):
+            arquivos_locais.extend(sorted(DATA_DIR.glob(ext)))
+
+    opcoes_fonte = ["🧪 Base de demonstração"]
+    if arquivos_locais:
+        opcoes_fonte.append(f"📂 Pasta data/ ({len(arquivos_locais)} arquivos)")
+    opcoes_fonte.append("📤 Upload manual")
+
+    fonte = st.sidebar.radio(
+        "Fonte de dados",
+        opcoes_fonte,
+        index=1 if len(opcoes_fonte) == 3 else 0,  # se há data/, default = data/
+        help="Demo: base fictícia do ES. data/: arquivos versionados no repo. Upload: enviar agora.",
     )
+
+    arquivo = None
+    arquivos_data_paths: list[Path] = []
+    usar_demo = "demonstração" in fonte
+
+    if "Pasta data/" in fonte and arquivos_locais:
+        nomes = [p.name for p in arquivos_locais]
+        selecionados = st.sidebar.multiselect(
+            "Arquivos a carregar",
+            options=nomes,
+            default=nomes,  # tudo marcado por padrão
+            help="Desmarque os que não quiser usar agora.",
+        )
+        arquivos_data_paths = [p for p in arquivos_locais if p.name in selecionados]
+        st.sidebar.caption(
+            f"📂 {len(arquivos_data_paths)} de {len(arquivos_locais)} arquivos serão consolidados."
+        )
+    elif "Upload" in fonte:
+        arquivo = st.sidebar.file_uploader(
+            "Carregar arquivo(s)",
+            type=["csv", "xlsx", "xls", "kml", "kmz"],
+            help="Formatos: CSV, XLSX, KML, KMZ. Pode selecionar vários arquivos ao mesmo tempo "
+                 "— eles são consolidados em uma única base. KMZs com cor de ícone são "
+                 "convertidos para Nota Geral 1-5 automaticamente.",
+            accept_multiple_files=True,
+        )
     st.sidebar.markdown(
         """
         <div class="data-format-hint">
@@ -1537,6 +1572,7 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     return {
         "usar_demo": usar_demo,
         "arquivo": arquivo,
+        "arquivos_data_paths": arquivos_data_paths,
         "modo_rede": modo_rede,
         "buffer_km": buffer_km,
         "mostrar_malha": mostrar_malha,
@@ -1930,27 +1966,40 @@ def main() -> None:
 
     # Decide qual base usar
     df_novo: pd.DataFrame = pd.DataFrame()
-    arquivos = opcoes["arquivo"]
-    if arquivos:
-        # st.file_uploader com accept_multiple_files=True devolve lista; sem flag, um objeto.
-        if not isinstance(arquivos, list):
-            arquivos = [arquivos]
+
+    def _consolidar(fontes: list, label_origem: str) -> pd.DataFrame:
+        """Carrega cada item, concatena e deduplica códigos."""
         partes = []
-        for a in arquivos:
+        for a in fontes:
             d = carregar_arquivo(a)
             if not d.empty:
                 partes.append(d)
-        if partes:
-            df_novo = pd.concat(partes, ignore_index=True)
-            if df_novo["Código OAE"].duplicated().any():
-                df_novo["Código OAE"] = (
-                    df_novo["Código OAE"].astype(str)
-                    + "_" + df_novo.groupby("Código OAE").cumcount().astype(str)
-                )
-                df_novo["Código OAE"] = df_novo["Código OAE"].str.replace(r"_0$", "", regex=True)
-            st.sidebar.success(
-                f"✓ {len(arquivos)} arquivo(s) consolidados — total: {len(df_novo)} OAEs"
+            else:
+                nome = a.name if hasattr(a, "name") else str(a)
+                st.sidebar.warning(f"⚠️ Sem registros em **{nome}** — ignorado.")
+        if not partes:
+            return pd.DataFrame()
+        df = pd.concat(partes, ignore_index=True)
+        if df["Código OAE"].duplicated().any():
+            df["Código OAE"] = (
+                df["Código OAE"].astype(str)
+                + "_" + df.groupby("Código OAE").cumcount().astype(str)
             )
+            df["Código OAE"] = df["Código OAE"].str.replace(r"_0$", "", regex=True)
+        st.sidebar.success(
+            f"✓ {label_origem}: {len(fontes)} arquivo(s) → **{len(df)} OAEs**"
+        )
+        return df
+
+    arquivos_data_paths = opcoes.get("arquivos_data_paths") or []
+    arquivos_upload = opcoes.get("arquivo") or []
+    if not isinstance(arquivos_upload, list):
+        arquivos_upload = [arquivos_upload]
+
+    if arquivos_data_paths:
+        df_novo = _consolidar(arquivos_data_paths, "Pasta data/")
+    elif arquivos_upload:
+        df_novo = _consolidar(arquivos_upload, "Upload")
     elif opcoes["usar_demo"]:
         if SAMPLE_DATA_PATH.exists():
             df_novo = carregar_arquivo(SAMPLE_DATA_PATH)
