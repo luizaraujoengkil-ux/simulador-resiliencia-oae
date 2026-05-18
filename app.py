@@ -966,6 +966,61 @@ def desenhar_mapa(
     return m
 
 
+def _area_de_interesse(
+    df: pd.DataFrame,
+    interdicao: list[str],
+    origem: str | None,
+    destino: str | None,
+    buffer_km: float = 2.0,
+) -> tuple[float, float, float] | None:
+    """Calcula (centro_lat, centro_lon, raio_m) cobrindo as OAEs envolvidas no cenário.
+
+    Junta as coordenadas das OAEs interditadas + origem + destino, calcula o centroide
+    e o raio mínimo que cobre todos esses pontos. Adiciona o buffer (em km) como margem.
+    Retorna None se não houver OAEs envolvidas.
+    """
+    codigos: list[str] = []
+    if interdicao:
+        codigos.extend(str(c) for c in interdicao)
+    if origem:
+        codigos.append(str(origem))
+    if destino:
+        codigos.append(str(destino))
+    if not codigos:
+        return None
+
+    pontos: list[tuple[float, float]] = []
+    vistos: set[str] = set()
+    for cod in codigos:
+        if cod in vistos:
+            continue
+        vistos.add(cod)
+        sel = df[df["Código OAE"].astype(str) == cod]
+        if sel.empty:
+            continue
+        linha = sel.iloc[0]
+        try:
+            pontos.append((float(linha["Latitude"]), float(linha["Longitude"])))
+        except (TypeError, ValueError):
+            continue
+
+    if not pontos:
+        return None
+
+    centro_lat = sum(p[0] for p in pontos) / len(pontos)
+    centro_lon = sum(p[1] for p in pontos) / len(pontos)
+
+    if len(pontos) == 1:
+        # Único ponto: raio = só o buffer (com mínimo de 1.5 km)
+        raio_m = max(buffer_km * 1000.0, 1500.0)
+    else:
+        max_dist_m = max(_haversine_m(centro_lat, centro_lon, p[0], p[1]) for p in pontos)
+        raio_m = max_dist_m + buffer_km * 1000.0
+        raio_m = max(raio_m, 1500.0)
+
+    return centro_lat, centro_lon, raio_m
+
+
 def _extrair_malha_geojson(G) -> dict:
     """Extrai todas as arestas do grafo OSM como FeatureCollection GeoJSON."""
     features = []
@@ -1189,16 +1244,18 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         ["Automático (OSM → simplificado se falhar)", "Forçar modo simplificado"],
         index=0,
     )
-    raio_km = st.sidebar.slider(
-        "Raio (km) para baixar rede via OSM",
-        1, 30, value=8,
-        help="Define o tamanho da área de download. Quanto maior, mais ruas — porém mais lento e pesado.",
+    buffer_km = st.sidebar.slider(
+        "Buffer (km) ao redor da área de interesse",
+        1, 10, value=2,
+        help="O raio do download da malha é calculado automaticamente para cobrir "
+             "as OAEs interditadas + origem + destino. Este valor adiciona contexto "
+             "ao redor (recomendado: 2-5 km).",
     )
     st.sidebar.markdown(
         """
         <div class="slider-hint">
-            ⚡ <b>Quanto maior o raio, mais lento.</b><br>
-            Sugestão: <code>3-5 km</code> área urbana &middot; <code>8-15 km</code> região &middot; <code>20-30 km</code> só se necessário.
+            ℹ️ <b>Raio automático:</b> calculado da triangulação das OAEs interditadas + origem/destino.
+            Este buffer só adiciona contexto extra ao redor.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1207,8 +1264,9 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     mostrar_malha = st.sidebar.toggle(
         "🌐 Mostrar malha viária no mapa geral",
         value=False,
-        help="Baixa a rede viária do OSM e desenha por cima do mapa de criticidade. "
-             "A 1ª ativação pode levar alguns segundos (depois fica em cache).",
+        help="Baixa a rede viária do OSM ao redor das OAEs interditadas e desenha "
+             "por cima do mapa de criticidade. Só funciona após selecionar interdição. "
+             "A 1ª ativação demora alguns segundos (depois fica em cache).",
     )
 
     interdicao: list[str] = []
@@ -1375,7 +1433,7 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         "usar_demo": usar_demo,
         "arquivo": arquivo,
         "modo_rede": modo_rede,
-        "raio_km": raio_km,
+        "buffer_km": buffer_km,
         "mostrar_malha": mostrar_malha,
         "interdicao": interdicao,
         "origem": origem,
@@ -1419,14 +1477,23 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
             if modo_forcado_simples:
                 st.write("• Modo simplificado **forçado** pelo usuário — pulando OSM.")
             else:
-                st.write("• Baixando rede viária do OpenStreetMap...")
-                centro_lat = float(df["Latitude"].mean())
-                centro_lon = float(df["Longitude"].mean())
-                G_osm = construir_grafo_osm(centro_lat, centro_lon, opcoes["raio_km"] * 1000)
-                if G_osm is not None:
-                    st.write(f"  ✓ Rede OSM carregada ({G_osm.number_of_nodes()} nós, {G_osm.number_of_edges()} vias).")
+                area = _area_de_interesse(
+                    df, interdicao, origem_cod, destino_cod, opcoes.get("buffer_km", 2)
+                )
+                if area is None:
+                    st.write("  ✗ Não foi possível calcular a área — caindo para o simplificado.")
                 else:
-                    st.write("  ✗ OSM indisponível — caindo para o modo simplificado.")
+                    centro_lat, centro_lon, raio_m = area
+                    st.write(
+                        f"• Área de interesse: centro **({centro_lat:.4f}, {centro_lon:.4f})**, "
+                        f"raio **{raio_m/1000:.2f} km** (auto + buffer {opcoes.get('buffer_km', 2)} km)."
+                    )
+                    st.write("• Baixando rede viária do OpenStreetMap...")
+                    G_osm = construir_grafo_osm(centro_lat, centro_lon, raio_m)
+                    if G_osm is not None:
+                        st.write(f"  ✓ Rede OSM carregada ({G_osm.number_of_nodes()} nós, {G_osm.number_of_edges()} vias).")
+                    else:
+                        st.write("  ✗ OSM indisponível — caindo para o modo simplificado.")
 
             # ----- Etapa 2: rotas -----
             if G_osm is not None:
@@ -1808,21 +1875,38 @@ def main() -> None:
     # Tenta baixar a malha viária se o usuário ativou o toggle
     malha_geral = None
     if opcoes.get("mostrar_malha"):
-        centro_lat = float(df["Latitude"].mean())
-        centro_lon = float(df["Longitude"].mean())
-        with st.spinner("🌐 Baixando malha viária do OpenStreetMap (cacheado a partir da 2ª vez)..."):
-            G_geral = construir_grafo_osm(centro_lat, centro_lon, opcoes["raio_km"] * 1000)
-        if G_geral is not None:
-            malha_geral = _extrair_malha_geojson(G_geral)
-            st.caption(
-                f"🌐 Malha OSM carregada: **{G_geral.number_of_nodes()} nós · "
-                f"{G_geral.number_of_edges()} vias** dentro de **{opcoes['raio_km']} km**."
+        if not interdicao_atual:
+            st.info(
+                "ℹ️ **Selecione ao menos uma OAE interditada na sidebar** para carregar a malha viária. "
+                "O raio é calculado automaticamente a partir das OAEs interditadas + origem/destino + buffer."
             )
         else:
-            st.warning(
-                "⚠️ Não foi possível baixar a malha (sem internet ou área inválida). "
-                "Desative o toggle 🌐 ou tente novamente."
+            area = _area_de_interesse(
+                df, interdicao_atual, opcoes.get("origem"), opcoes.get("destino"),
+                opcoes.get("buffer_km", 2),
             )
+            if area is None:
+                st.warning("⚠️ Não foi possível calcular a área a partir das OAEs selecionadas.")
+            else:
+                centro_lat, centro_lon, raio_m = area
+                with st.spinner(
+                    f"🌐 Baixando malha do OSM · centro ({centro_lat:.4f}, {centro_lon:.4f}) · "
+                    f"raio {raio_m/1000:.2f} km..."
+                ):
+                    G_geral = construir_grafo_osm(centro_lat, centro_lon, raio_m)
+                if G_geral is not None:
+                    malha_geral = _extrair_malha_geojson(G_geral)
+                    st.caption(
+                        f"🌐 Malha OSM: **{G_geral.number_of_nodes()} nós · "
+                        f"{G_geral.number_of_edges()} vias** em **raio {raio_m/1000:.2f} km** "
+                        f"(centroide das {len(interdicao_atual)} OAE(s) interditada(s) + OD + buffer "
+                        f"{opcoes.get('buffer_km', 2)} km)."
+                    )
+                else:
+                    st.warning(
+                        "⚠️ Não foi possível baixar a malha (sem internet ou área inválida). "
+                        "Desative o toggle 🌐 ou tente novamente."
+                    )
 
     mapa_geral = desenhar_mapa(df, interditadas=interdicao_atual, malha=malha_geral, titulo=None)
     st_folium(mapa_geral, width=None, height=520, returned_objects=[])
