@@ -1344,16 +1344,24 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     usar_demo = "demonstração" in fonte
 
     if "Pasta data/" in fonte and arquivos_locais:
+        import hashlib
         nomes = [p.name for p in arquivos_locais]
+        # "Impressão digital" da lista atual: muda sempre que algum arquivo é
+        # adicionado/renomeado/removido. Isso vira a key do multiselect, então
+        # arquivos novos sempre entram já marcados (estado anterior é descartado).
+        fingerprint = hashlib.md5(",".join(sorted(nomes)).encode()).hexdigest()[:10]
         selecionados = st.sidebar.multiselect(
             "Arquivos a carregar",
             options=nomes,
-            default=nomes,  # tudo marcado por padrão
-            help="Desmarque os que não quiser usar agora.",
+            default=nomes,
+            help="Desmarque os que não quiser usar agora. Novos arquivos colocados em "
+                 "data/ aparecem aqui automaticamente após refresh (já marcados).",
+            key=f"ms_data_{fingerprint}",
         )
         arquivos_data_paths = [p for p in arquivos_locais if p.name in selecionados]
         st.sidebar.caption(
-            f"📂 {len(arquivos_data_paths)} de {len(arquivos_locais)} arquivos serão consolidados."
+            f"📂 {len(arquivos_data_paths)} de {len(arquivos_locais)} arquivo(s) marcado(s) "
+            f"· lista re-escaneada a cada refresh da página."
         )
     elif "Upload" in fonte:
         arquivo = st.sidebar.file_uploader(
