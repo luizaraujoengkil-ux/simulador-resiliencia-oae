@@ -1,5 +1,13 @@
 # Simulador de Resiliência da Rede Viária — Interdição de OAEs
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Streamlit](https://img.shields.io/badge/Streamlit-Cloud-FF4B4B.svg)](https://share.streamlit.io)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+
+**Autor:** Luiz Araujo de Souza Junior
+**Contexto acadêmico:** ET 261400 — Ciência de Dados e Aprendizado Profundo aplicados aos Transportes
+**Licença:** [MIT](LICENSE)
+
 Aplicativo **Streamlit** para análise de impacto da interdição de **OAEs (Obras de Arte Especiais)** — pontes e viadutos — sobre a rede viária. Permite carregar uma base de OAEs, visualizar a criticidade em mapa interativo, simular o fechamento de uma ou mais obras e comparar **rota original × rota alternativa**, com indicadores de impacto.
 
 ## ✨ Recursos

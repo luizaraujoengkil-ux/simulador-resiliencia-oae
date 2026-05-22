@@ -285,7 +285,9 @@ def aplicar_estilo() -> None:
         .status-fail { color: #E63946; font-weight: 700; }
 
         /* ----- Botões ----- */
-        .stButton > button {
+        .stButton > button,
+        .stDownloadButton > button,
+        [data-testid="stDownloadButton"] button {
             background: linear-gradient(90deg, #00E0D4, #1E6091);
             color: #07111F;
             font-weight: 700;
@@ -294,10 +296,36 @@ def aplicar_estilo() -> None:
             padding: 0.45rem 1rem;
             font-size: 0.88rem;
         }
-        .stButton > button:hover {
+        .stButton > button:hover,
+        .stDownloadButton > button:hover,
+        [data-testid="stDownloadButton"] button:hover {
             filter: brightness(1.08);
             color: #07111F;
         }
+        .stButton > button:disabled,
+        .stDownloadButton > button:disabled {
+            background: #1F2D4A;
+            color: #6B7A99;
+            filter: none;
+        }
+        /* Uploader "Browse files" — mantém escuro com borda teal */
+        [data-testid="stFileUploaderDropzone"] button {
+            background: #0F1B33 !important;
+            color: #00E0D4 !important;
+            border: 1px solid #00E0D4 !important;
+        }
+        /* Rodapé com autor / licença */
+        .app-footer {
+            margin-top: 2rem;
+            padding: 0.9rem 1rem;
+            border-top: 1px solid #1F2D4A;
+            font-size: 0.78rem;
+            color: #8FA0BA;
+            text-align: center;
+            line-height: 1.5;
+        }
+        .app-footer a { color: #00E0D4; text-decoration: none; }
+        .app-footer a:hover { text-decoration: underline; }
 
         /* ----- Sidebar ----- */
         section[data-testid="stSidebar"] {
@@ -1068,6 +1096,75 @@ def desenhar_mapa(
     return m
 
 
+def _auto_od_da_oae(
+    G,
+    oae_lat: float,
+    oae_lon: float,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """Deriva par (Origem, Destino) automaticamente para uma OAE no grafo OSM.
+
+    Lógica: encontra o nó da rede mais próximo da OAE, lista seus vizinhos
+    (sucessores + predecessores) e escolhe o par cujos ângulos são mais opostos
+    (próximo de 180°) — ou seja, o "antes" e "depois" da OAE no eixo da via.
+
+    Retorna ((origem_lat, origem_lon), (destino_lat, destino_lon)) ou None.
+    """
+    no = _no_mais_proximo(G, oae_lat, oae_lon)
+    if no is None:
+        return None
+
+    # Conjunto de vizinhos (grafo direcionado: union de sucessores e predecessores)
+    try:
+        vizinhos = set(G.successors(no)) | set(G.predecessors(no))
+    except Exception:
+        return None
+    vizinhos.discard(no)
+    if not vizinhos:
+        return None
+
+    no_y = G.nodes[no]["y"]
+    no_x = G.nodes[no]["x"]
+
+    angulos: dict[int, float] = {}
+    for v in vizinhos:
+        try:
+            vy = G.nodes[v]["y"]
+            vx = G.nodes[v]["x"]
+        except KeyError:
+            continue
+        angulos[v] = math.atan2(vy - no_y, vx - no_x)
+
+    if not angulos:
+        return None
+
+    # Par de vizinhos cuja diferença angular é mais próxima de π (eixo da via)
+    melhor_diff = -1.0
+    melhor_par: tuple[int, int] | None = None
+    items = list(angulos.items())
+    for i, (a, ang_a) in enumerate(items):
+        for b, ang_b in items[i + 1:]:
+            diff = abs(ang_a - ang_b)
+            if diff > math.pi:
+                diff = 2 * math.pi - diff
+            if diff > melhor_diff:
+                melhor_diff = diff
+                melhor_par = (a, b)
+
+    if melhor_par is None:
+        # Só 1 vizinho → usa o próprio nó da OAE como destino
+        v = next(iter(angulos))
+        return (
+            (G.nodes[v]["y"], G.nodes[v]["x"]),
+            (no_y, no_x),
+        )
+
+    a, b = melhor_par
+    return (
+        (G.nodes[a]["y"], G.nodes[a]["x"]),  # "jusante" (origem)
+        (G.nodes[b]["y"], G.nodes[b]["x"]),  # "montante" (destino)
+    )
+
+
 def _area_de_interesse(
     df: pd.DataFrame,
     interdicao: list[str],
@@ -1317,6 +1414,22 @@ def cards_indicadores(
 # UI principal
 # ----------------------------------------------------------------------------
 
+def _renderiza_contador_sim(slot) -> None:
+    """Renderiza o contador 'X simulações executadas' no placeholder fornecido.
+    Pode ser chamado várias vezes — cada chamada substitui o conteúdo do slot."""
+    sim_count = st.session_state.get("sim_count", 0)
+    plural = "simulação executada" if sim_count == 1 else "simulações executadas"
+    slot.markdown(
+        f"""
+        <div class="sim-counter">
+            <span>📊 {plural}</span>
+            <span class="count">{sim_count}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def sidebar_inputs(df: pd.DataFrame) -> dict:
     """Renderiza a sidebar e devolve as escolhas do usuário."""
     st.sidebar.header("⚙️ Controles")
@@ -1515,37 +1628,39 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             unsafe_allow_html=True,
         )
 
-        # ---- Origem e destino ----
-        st.sidebar.subheader("Origem e destino")
-        disponiveis = [c for c in opcoes if c not in interdicao] or opcoes
-
-        # Garante que valores em session_state sejam válidos para a lista atual
-        if st.session_state.get("origem_sel") not in disponiveis:
-            st.session_state["origem_sel"] = disponiveis[0]
-        if st.session_state.get("destino_sel") not in disponiveis:
-            st.session_state["destino_sel"] = disponiveis[-1] if len(disponiveis) > 1 else disponiveis[0]
-
-        origem = st.sidebar.selectbox("Origem", disponiveis, key="origem_sel")
-        destino = st.sidebar.selectbox("Destino", disponiveis, key="destino_sel")
-
-        def _sortear_od(opcoes_sortear: list[str]) -> None:
-            # Callback: roda ANTES do próximo render, então pode mexer
-            # em session_state com chaves de widgets (origem_sel / destino_sel).
-            if len(opcoes_sortear) >= 2:
-                o, d = random.sample(opcoes_sortear, 2)
-                st.session_state["origem_sel"] = o
-                st.session_state["destino_sel"] = d
-
-        st.sidebar.button(
-            "🎲 Sortear origem/destino",
-            use_container_width=True,
-            disabled=len(disponiveis) < 2,
-            help="Sorteia aleatoriamente um par origem/destino entre as OAEs não interditadas. "
-                 "Útil para avaliar interferências em múltiplos cenários.",
-            key="btn_random_od",
-            on_click=_sortear_od,
-            args=(disponiveis,),
-        )
+        # ---- OAE focal para análise OD ----
+        # Substitui o antigo OAE→OAE: a origem é um ponto a JUSANTE da OAE e o
+        # destino um ponto a MONTANTE, derivados do nó OSM da OAE focal.
+        st.sidebar.subheader("Foco da análise")
+        if not interdicao:
+            st.sidebar.markdown(
+                """
+                <div class="empty-state" style="padding:0.8rem;text-align:left;">
+                    <div class="small-text">
+                        Selecione ao menos 1 OAE interditada acima.
+                        Origem e destino são <b>derivados automaticamente</b> da OAE focal.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            origem = None
+            destino = None
+        else:
+            origem = st.sidebar.selectbox(
+                "OAE focal (define origem/destino)",
+                interdicao,
+                help="A simulação calcula a rota entre um ponto a jusante e outro a montante "
+                     "dessa OAE no grafo OSM. Útil para isolar o impacto desta obra específica.",
+                key="oae_focal_sel",
+            )
+            # Mantemos a chave 'destino' por compatibilidade com o restante do código,
+            # mas neste modo ela representa a mesma OAE focal (OD é derivado dela).
+            destino = origem
+            st.sidebar.caption(
+                "ℹ️ Os pontos de origem e destino são pontos da via — antes e depois da OAE focal — "
+                "calculados automaticamente no momento da simulação."
+            )
 
         # ---- Executar simulação + contador ----
         st.sidebar.markdown("---")
@@ -1555,17 +1670,12 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             type="primary",
         )
 
+        # Placeholder do contador — pode ser atualizado depois da simulação
+        # via _atualizar_contador_sidebar() sem precisar de st.rerun().
+        counter_slot = st.sidebar.empty()
+        _renderiza_contador_sim(counter_slot)
+
         sim_count = st.session_state.get("sim_count", 0)
-        plural_sim = "simulação executada" if sim_count == 1 else "simulações executadas"
-        st.sidebar.markdown(
-            f"""
-            <div class="sim-counter">
-                <span>📊 {plural_sim}</span>
-                <span class="count">{sim_count}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
         if st.sidebar.button(
             "🧹 Limpar contagem",
             use_container_width=True,
@@ -1588,6 +1698,7 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         "origem": origem,
         "destino": destino,
         "executar": executar,
+        "counter_slot": counter_slot if not df.empty else None,
     }
 
 
@@ -1597,19 +1708,21 @@ def obter_ponto(df: pd.DataFrame, codigo: str) -> tuple[float, float]:
 
 
 def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
-    origem_cod = opcoes["origem"]
-    destino_cod = opcoes["destino"]
     interdicao = opcoes["interdicao"] or []
+    oae_focal = opcoes.get("origem")  # agora é o código da OAE focal (escolhida na sidebar)
 
-    if origem_cod == destino_cod:
-        st.warning("⚠️ Selecione OAEs **diferentes** para origem e destino.")
-        return None
+    if not oae_focal or oae_focal not in interdicao:
+        # garante uma OAE focal válida (default: primeira interditada)
+        if interdicao:
+            oae_focal = interdicao[0]
+        else:
+            st.warning("⚠️ Selecione ao menos 1 OAE interditada na sidebar.")
+            return None
 
     try:
-        o_lat, o_lon = obter_ponto(df, origem_cod)
-        d_lat, d_lon = obter_ponto(df, destino_cod)
+        oae_lat, oae_lon = obter_ponto(df, oae_focal)
     except (KeyError, IndexError) as exc:
-        st.error(f"❌ Não consegui localizar a OAE de origem/destino na base: {exc}")
+        st.error(f"❌ Não consegui localizar a OAE focal **{oae_focal}** na base: {exc}")
         return None
 
     modo_forcado_simples = opcoes["modo_rede"].startswith("Forçar")
@@ -1619,6 +1732,9 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     modo_usado = "simplificado"
     G_osm = None
     malha_geojson = None
+    # Origem/destino são derivados automaticamente; começam com a posição da OAE
+    o_lat = d_lat = oae_lat
+    o_lon = d_lon = oae_lon
 
     with st.status("⏳ Executando simulação...", expanded=True) as status:
         try:
@@ -1626,8 +1742,10 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
             if modo_forcado_simples:
                 st.write("• Modo simplificado **forçado** pelo usuário — pulando OSM.")
             else:
+                # Área inclui apenas as OAEs interditadas (OD será derivado depois)
                 area = _area_de_interesse(
-                    df, interdicao, origem_cod, destino_cod, opcoes.get("buffer_km", 2)
+                    df, interdicao, origem=None, destino=None,
+                    buffer_km=opcoes.get("buffer_km", 2),
                 )
                 if area is None:
                     st.write("  ✗ Não foi possível calcular a área — caindo para o simplificado.")
@@ -1635,7 +1753,8 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
                     centro_lat, centro_lon, raio_m = area
                     st.write(
                         f"• Área de interesse: centro **({centro_lat:.4f}, {centro_lon:.4f})**, "
-                        f"raio **{raio_m/1000:.2f} km** (auto + buffer {opcoes.get('buffer_km', 2)} km)."
+                        f"raio **{raio_m/1000:.2f} km** (centroide das interditadas + buffer "
+                        f"{opcoes.get('buffer_km', 2)} km)."
                     )
                     st.write("• Baixando rede viária do OpenStreetMap...")
                     G_osm = construir_grafo_osm(centro_lat, centro_lon, raio_m)
@@ -1646,6 +1765,21 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
 
             # ----- Etapa 2: rotas -----
             if G_osm is not None:
+                st.write(f"• Derivando origem/destino a partir da OAE focal **{oae_focal}**...")
+                od = _auto_od_da_oae(G_osm, oae_lat, oae_lon)
+                if od is None:
+                    status.update(label="❌ Não consegui derivar OD da OAE focal", state="error")
+                    st.error(
+                        f"O nó OSM mais próximo de **{oae_focal}** não tem vizinhos suficientes "
+                        "para definir um par origem/destino. Tente outra OAE focal ou aumente o buffer."
+                    )
+                    return None
+                (o_lat, o_lon), (d_lat, d_lon) = od
+                st.write(
+                    f"  ✓ Origem (a jusante): **({o_lat:.5f}, {o_lon:.5f})** · "
+                    f"Destino (a montante): **({d_lat:.5f}, {d_lon:.5f})**"
+                )
+
                 st.write("• Mapeando OAEs interditadas para nós do grafo...")
                 nos_remover: set[int] = set()
                 for cod in interdicao:
@@ -1665,11 +1799,23 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
                 st.write(f"  ✓ Malha com {len(malha_geojson.get('features', []))} segmentos.")
                 modo_usado = "OSM"
             else:
+                # Modo simplificado: usa os 2 vizinhos mais próximos da OAE focal no grafo simplificado
                 G_simp = construir_grafo_simplificado(df, k_vizinhos=3)
+                vizinhos = list(G_simp.neighbors(oae_focal)) if oae_focal in G_simp else []
+                if len(vizinhos) >= 2:
+                    o_cod, d_cod = vizinhos[0], vizinhos[1]
+                else:
+                    # Fallback: usa duas OAEs distintas do dataset
+                    todos = df["Código OAE"].astype(str).tolist()
+                    o_cod = next((c for c in todos if c != oae_focal), oae_focal)
+                    d_cod = next((c for c in todos if c not in (oae_focal, o_cod)), o_cod)
+                o_lat, o_lon = obter_ponto(df, o_cod)
+                d_lat, d_lon = obter_ponto(df, d_cod)
+                st.write(f"• OD (modo simplificado): {o_cod} → {d_cod}")
                 st.write("• Calculando rotas no grafo simplificado...")
-                coords_orig, dist_orig = calcular_rota_simplificada(G_simp, origem_cod, destino_cod)
+                coords_orig, dist_orig = calcular_rota_simplificada(G_simp, o_cod, d_cod)
                 coords_alt, dist_alt = calcular_rota_simplificada(
-                    G_simp, origem_cod, destino_cod, set(map(str, interdicao))
+                    G_simp, o_cod, d_cod, set(map(str, interdicao))
                 )
 
             tem_alt = len(coords_alt) >= 2
@@ -1737,18 +1883,19 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     )
     folium.Marker(
         [o_lat, o_lon],
-        tooltip=f"Origem: {origem_cod}",
+        tooltip=f"Origem (a jusante de {oae_focal})",
         icon=folium.Icon(color="green", icon="play", prefix="fa"),
     ).add_to(mapa)
     folium.Marker(
         [d_lat, d_lon],
-        tooltip=f"Destino: {destino_cod}",
+        tooltip=f"Destino (a montante de {oae_focal})",
         icon=folium.Icon(color="red", icon="flag-checkered", prefix="fa"),
     ).add_to(mapa)
     st_folium(mapa, width=None, height=560, returned_objects=[])
 
     st.caption(
         f"**Modo de cálculo:** {modo_usado}  ·  "
+        f"**OAE focal:** {oae_focal}  ·  "
         "🔵 **Malha viária** (rede OSM)  ·  "
         "🔴 **Rota original** afetada pela interdição (tracejada)  ·  "
         "🟢 **Rota alternativa** proposta."
@@ -1756,8 +1903,14 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
 
     return {
         "timestamp": datetime.now(),
-        "origem": str(origem_cod),
-        "destino": str(destino_cod),
+        "oae_focal": str(oae_focal),
+        "origem_lat": float(o_lat),
+        "origem_lon": float(o_lon),
+        "destino_lat": float(d_lat),
+        "destino_lon": float(d_lon),
+        # mantém origem/destino como strings legíveis (para PDF e tabela)
+        "origem": f"({o_lat:.5f}, {o_lon:.5f})",
+        "destino": f"({d_lat:.5f}, {d_lon:.5f})",
         "interdicao": [str(c) for c in interdicao],
         "dist_orig_m": float(dist_orig),
         "dist_alt_m": float(dist_alt) if tem_alt else 0.0,
@@ -1846,8 +1999,8 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.cell(72, 7, _txt(" Detalhamento das simulações"), fill=True, ln=True)
     pdf.ln(2)
 
-    headers = ["#", "Hora", "Origem", "Destino", "Intd.", "Modo", "Orig.(km)", "Alt.(km)", "Var.(%)"]
-    widths  = [ 8,    18,     22,        22,         12,     18,      20,           20,         20]
+    headers = ["#", "Hora", "OAE focal", "Intd.", "Modo", "Orig.(km)", "Alt.(km)", "Var.(%)"]
+    widths  = [ 8,    18,     34,           14,     20,      24,           24,         20]
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_fill_color(220, 230, 240)
     for h, w in zip(headers, widths):
@@ -1862,11 +2015,11 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
             var = f"+{(s['dist_alt_m'] - s['dist_orig_m']) / s['dist_orig_m'] * 100:.1f}%"
         elif not s["tem_alt"]:
             var = "sem rota"
+        focal = s.get("oae_focal", "—")
         row = [
             str(i),
             hora,
-            s["origem"][:10],
-            s["destino"][:10],
+            focal[:18],
             str(len(s["interdicao"])),
             s["modo"],
             f"{s['dist_orig_m']/1000:.2f}" if s["dist_orig_m"] else "-",
@@ -2160,6 +2313,9 @@ def main() -> None:
             if resultado is not None:
                 st.session_state.setdefault("simulacoes", []).append(resultado)
                 st.session_state["sim_count"] = st.session_state.get("sim_count", 0) + 1
+                # Atualiza o contador na sidebar SEM aguardar próxima interação
+                if opcoes.get("counter_slot") is not None:
+                    _renderiza_contador_sim(opcoes["counter_slot"])
     else:
         st.markdown(
             '<div class="small-note">Selecione OAEs para interditar, defina origem e destino '
@@ -2228,8 +2384,9 @@ def main() -> None:
             {
                 "#": i + 1,
                 "Hora": s["timestamp"].strftime("%H:%M:%S") if hasattr(s["timestamp"], "strftime") else str(s["timestamp"]),
-                "Origem": s["origem"],
-                "Destino": s["destino"],
+                "OAE focal": s.get("oae_focal", "—"),
+                "Origem (lat,lon)": s.get("origem", ""),
+                "Destino (lat,lon)": s.get("destino", ""),
                 "Interditadas": len(s["interdicao"]),
                 "Modo": s["modo"],
                 "Dist. orig. (km)": round(s["dist_orig_m"] / 1000, 2) if s["dist_orig_m"] else None,
@@ -2263,6 +2420,22 @@ def main() -> None:
             st.session_state["simulacoes"] = []
             st.session_state["sim_count"] = 0
             st.rerun()
+
+    # ----- Rodapé com autor e licença -----
+    st.markdown(
+        f"""
+        <div class="app-footer">
+            <b>{APP_TITLE}</b> &middot; {APP_MODULO} {APP_VERSAO}<br>
+            Desenvolvido por <b>Luiz Araujo de Souza Junior</b>
+            &middot; ET 261400 — Ciência de Dados e Aprendizado Profundo aplicados aos Transportes<br>
+            Licença
+            <a href="https://github.com/luizaraujoengkil-ux/simulador-resiliencia-oae/blob/main/LICENSE" target="_blank">MIT</a>
+            &middot;
+            <a href="https://github.com/luizaraujoengkil-ux/simulador-resiliencia-oae" target="_blank">código no GitHub</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
