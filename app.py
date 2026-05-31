@@ -1117,83 +1117,134 @@ def _reverse_geocode(lat: float, lon: float) -> dict | None:
     return None
 
 
-def enriquecer_geocodificacao(df: pd.DataFrame) -> pd.DataFrame:
-    """Preenche Município/UF e Rodovia/Trecho ausentes via Nominatim.
+def _vazio_geo(s: object) -> bool:
+    """True se o campo está vazio/placeholder e merece geocoding."""
+    return str(s).strip().lower() in ("", "nan", "none", "não informado", "nao informado")
 
-    Só preenche linhas onde o campo está vazio ou 'Não informado'. Respeita
-    o rate limit de 1 req/s do Nominatim (sleep entre chamadas).
-    """
-    import time as _time
 
+def _extrair_municipio_rodovia(addr: dict) -> tuple[str | None, str | None]:
+    """Extrai 'Cidade / UF' e 'ref / road' do address dict do Nominatim."""
+    if not addr:
+        return None, None
+    cidade = (
+        addr.get("city")
+        or addr.get("town")
+        or addr.get("village")
+        or addr.get("municipality")
+        or addr.get("suburb")
+    )
+    uf = (
+        (addr.get("ISO3166-2-lvl4", "").split("-")[-1] if addr.get("ISO3166-2-lvl4") else "")
+        or addr.get("state_code", "")
+    )
+    municipio = (f"{cidade} / {uf}" if uf else cidade) if cidade else None
+
+    ref = (addr.get("ref") or "").strip()
+    road = (addr.get("road") or "").strip()
+    if ref and road:
+        rodovia = f"{ref} / {road}"
+    elif ref:
+        rodovia = ref
+    elif road:
+        rodovia = road
+    else:
+        rodovia = None
+    return municipio, rodovia
+
+
+def _aplicar_cache_enrichment(df: pd.DataFrame) -> pd.DataFrame:
+    """Aplica enrichment do session_state ao DataFrame (in-place, idempotente)."""
+    if df.empty:
+        return df
+    cache = st.session_state.get("enrichment_cache", {})
+    if not cache:
+        return df
     df = df.copy()
     if "Município / UF" not in df.columns:
         df["Município / UF"] = "Não informado"
     if "Rodovia / Trecho" not in df.columns:
         df["Rodovia / Trecho"] = "Não informado"
-
-    def _vazio(s: object) -> bool:
-        return str(s).strip().lower() in ("", "nan", "none", "não informado", "nao informado")
-
-    progress_bar = st.progress(0.0, text="Iniciando geocodificação...")
-    n_atualizados = {"municipio": 0, "rodovia": 0}
-
-    total = len(df)
-    for i, idx in enumerate(df.index):
-        precisa_mun = _vazio(df.at[idx, "Município / UF"])
-        precisa_rod = _vazio(df.at[idx, "Rodovia / Trecho"])
-        if not (precisa_mun or precisa_rod):
-            progress_bar.progress((i + 1) / total, text=f"({i+1}/{total}) já preenchido, pulando")
-            continue
-
-        codigo = str(df.at[idx, "Código OAE"])
+    for idx in df.index:
         try:
             lat = float(df.at[idx, "Latitude"])
             lon = float(df.at[idx, "Longitude"])
         except (TypeError, ValueError):
             continue
+        key = (round(lat, 5), round(lon, 5))
+        info = cache.get(key)
+        if not info:
+            continue
+        if info.get("municipio") and _vazio_geo(df.at[idx, "Município / UF"]):
+            df.at[idx, "Município / UF"] = info["municipio"]
+        if info.get("rodovia") and _vazio_geo(df.at[idx, "Rodovia / Trecho"]):
+            df.at[idx, "Rodovia / Trecho"] = info["rodovia"]
+    return df
 
-        progress_bar.progress(
-            (i + 0.5) / total,
-            text=f"({i+1}/{total}) Buscando {codigo} no OSM...",
+
+def enriquecer_geocodificacao_auto(df: pd.DataFrame) -> pd.DataFrame:
+    """Versão NATIVA: aplica cache primeiro, depois geocodifica o que falta.
+
+    Roda automaticamente após carregar os dados. Cada (lat, lon) é tentada uma
+    única vez por sessão (track em session_state['geocoding_attempted']).
+    O cache persiste durante a sessão em session_state['enrichment_cache'].
+    """
+    if df.empty:
+        return df
+
+    df = _aplicar_cache_enrichment(df)
+
+    if "Município / UF" not in df.columns:
+        df["Município / UF"] = "Não informado"
+    if "Rodovia / Trecho" not in df.columns:
+        df["Rodovia / Trecho"] = "Não informado"
+
+    cache = st.session_state.setdefault("enrichment_cache", {})
+    attempted = st.session_state.setdefault("geocoding_attempted", set())
+
+    pendentes: list[tuple] = []  # [(idx, key, lat, lon, codigo)]
+    for idx in df.index:
+        try:
+            lat = float(df.at[idx, "Latitude"])
+            lon = float(df.at[idx, "Longitude"])
+            key = (round(lat, 5), round(lon, 5))
+        except (TypeError, ValueError):
+            continue
+        if key in attempted:
+            continue
+        if _vazio_geo(df.at[idx, "Município / UF"]) or _vazio_geo(df.at[idx, "Rodovia / Trecho"]):
+            codigo = str(df.at[idx, "Código OAE"])
+            pendentes.append((idx, key, lat, lon, codigo))
+
+    if not pendentes:
+        return df
+
+    import time as _time
+
+    progress = st.progress(
+        0.0,
+        text=f"🌐 Preenchendo Município e Rodovia via OpenStreetMap ({len(pendentes)} OAE(s))...",
+    )
+
+    for i, (idx, key, lat, lon, codigo) in enumerate(pendentes):
+        progress.progress(
+            (i + 0.3) / len(pendentes),
+            text=f"🌐 ({i+1}/{len(pendentes)}) consultando {codigo}...",
         )
         addr = _reverse_geocode(lat, lon)
+        attempted.add(key)
 
         if addr:
-            if precisa_mun:
-                cidade = (
-                    addr.get("city")
-                    or addr.get("town")
-                    or addr.get("village")
-                    or addr.get("municipality")
-                    or addr.get("suburb")
-                )
-                uf = (
-                    (addr.get("ISO3166-2-lvl4", "").split("-")[-1] if addr.get("ISO3166-2-lvl4") else "")
-                    or addr.get("state_code", "")
-                )
-                if cidade:
-                    df.at[idx, "Município / UF"] = f"{cidade} / {uf}" if uf else cidade
-                    n_atualizados["municipio"] += 1
-            if precisa_rod:
-                ref = (addr.get("ref") or "").strip()
-                road = (addr.get("road") or "").strip()
-                if ref and road:
-                    df.at[idx, "Rodovia / Trecho"] = f"{ref} / {road}"
-                elif ref:
-                    df.at[idx, "Rodovia / Trecho"] = ref
-                elif road:
-                    df.at[idx, "Rodovia / Trecho"] = road
-                if df.at[idx, "Rodovia / Trecho"] not in ("Não informado", "nan", ""):
-                    n_atualizados["rodovia"] += 1
+            municipio, rodovia = _extrair_municipio_rodovia(addr)
+            cache[key] = {"municipio": municipio, "rodovia": rodovia}
+            if municipio and _vazio_geo(df.at[idx, "Município / UF"]):
+                df.at[idx, "Município / UF"] = municipio
+            if rodovia and _vazio_geo(df.at[idx, "Rodovia / Trecho"]):
+                df.at[idx, "Rodovia / Trecho"] = rodovia
 
-        progress_bar.progress((i + 1) / total, text=f"({i+1}/{total}) {codigo} ok")
-        _time.sleep(1.05)  # rate limit do Nominatim: 1 req/s
+        progress.progress((i + 1) / len(pendentes), text=f"🌐 ({i+1}/{len(pendentes)}) {codigo} ok")
+        _time.sleep(1.05)  # Nominatim rate limit: 1 req/s
 
-    progress_bar.empty()
-    st.success(
-        f"✓ Geocodificação concluída: **{n_atualizados['municipio']}** município(s) e "
-        f"**{n_atualizados['rodovia']}** rodovia(s) preenchidos via OSM."
-    )
+    progress.empty()
     return df
 
 
@@ -2441,6 +2492,13 @@ def main() -> None:
         )
         return
 
+    # ----- Enriquecimento automático (função NATIVA) -----
+    # Roda após cada carga: aplica cache do session_state e, se houver OAEs
+    # ainda sem Município/Rodovia, consulta o Nominatim/OSM (1 req/s).
+    # Cada (lat, lon) é tentada apenas 1 vez por sessão.
+    df = enriquecer_geocodificacao_auto(df)
+    st.session_state["df"] = df
+
     # Mapa geral — alvo do card "2. Visualizar mapa"
     interdicao_atual = opcoes.get("interdicao") or []
     st.markdown('<div id="mapa-criticidade"></div>', unsafe_allow_html=True)
@@ -2559,45 +2617,10 @@ def main() -> None:
     st.markdown("### 📋 Planilha de dados das OAEs")
     st.caption(
         f"Dados que estão sendo usados na simulação — {len(df)} OAEs carregadas. "
-        f"Confira aqui se a base bate com o que você espera antes de rodar o cenário."
+        f"Município/UF e Rodovia/Trecho são preenchidos automaticamente via OSM "
+        f"quando ausentes nos KMZs originais (Nominatim · 1 consulta por OAE, "
+        f"resultado em cache durante a sessão)."
     )
-
-    # Botão de enriquecimento via reverse geocoding (Nominatim/OSM)
-    def _campos_faltantes(d):
-        n_mun = (
-            d["Município / UF"]
-            .astype(str).str.strip().str.lower()
-            .isin(["", "nan", "none", "não informado", "nao informado"])
-            .sum()
-        )
-        n_rod = (
-            d["Rodovia / Trecho"]
-            .astype(str).str.strip().str.lower()
-            .isin(["", "nan", "none", "não informado", "nao informado"])
-            .sum()
-        )
-        return int(n_mun), int(n_rod)
-
-    n_mun_faltam, n_rod_faltam = _campos_faltantes(df)
-    if n_mun_faltam or n_rod_faltam:
-        col_btn, col_help = st.columns([2, 5])
-        if col_btn.button(
-            f"🌐 Preencher dados faltantes ({n_mun_faltam + n_rod_faltam})",
-            use_container_width=True,
-            help="Consulta o OpenStreetMap (Nominatim) pra preencher "
-                 "Município/UF e Rodovia/Trecho a partir da lat/lon de cada OAE. "
-                 "Leva ~1 segundo por OAE (rate limit do Nominatim).",
-            key="btn_geocode",
-        ):
-            df_enriquecido = enriquecer_geocodificacao(df)
-            st.session_state["df"] = df_enriquecido
-            st.rerun()
-        col_help.caption(
-            f"💡 **{n_mun_faltam}** Município(s)/UF e **{n_rod_faltam}** Rodovia(s)/Trecho "
-            "podem ser preenchidos automaticamente via OSM. Tempo estimado: "
-            f"~{max(1, len(df))} segundo(s)."
-        )
-
     cols_show = [c for c in COLUNAS_OBRIGATORIAS + COLUNAS_OPCIONAIS if c in df.columns]
     st.dataframe(df[cols_show], use_container_width=True, hide_index=True, height=300)
 
