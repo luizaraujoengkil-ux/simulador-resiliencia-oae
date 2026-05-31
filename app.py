@@ -2018,6 +2018,8 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     return {
         "timestamp": datetime.now(),
         "oae_focal": str(oae_focal),
+        "oae_focal_lat": float(oae_lat),
+        "oae_focal_lon": float(oae_lon),
         "origem_lat": float(o_lat),
         "origem_lon": float(o_lon),
         "destino_lat": float(d_lat),
@@ -2039,7 +2041,24 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
 
     def _txt(s: object) -> str:
         # Garante que a string é codificável em Latin-1 (suporta PT-BR).
+        # Substitui caracteres Unicode comuns por equivalentes Latin-1 ANTES
+        # da codificação para não virarem '?'.
         s = str(s)
+        substituicoes = {
+            "—": "-",     # em-dash (—)
+            "–": "-",     # en-dash (–)
+            "‘": "'",     # smart quote left
+            "’": "'",     # smart quote right
+            "“": '"',     # smart double quote left
+            "”": '"',     # smart double quote right
+            "…": "...",   # ellipsis (…)
+            " ": " ",     # non-breaking space
+            "→": "->",    # right arrow (→)
+            "←": "<-",    # left arrow (←)
+            "·": "·",     # middle dot (mantém — está em Latin-1)
+        }
+        for orig, sub in substituicoes.items():
+            s = s.replace(orig, sub)
         return s.encode("latin-1", errors="replace").decode("latin-1")
 
     pdf = FPDF(orientation="P", unit="mm", format="A4")
@@ -2113,8 +2132,8 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.cell(72, 7, _txt(" Detalhamento das simulações"), fill=True, ln=True)
     pdf.ln(2)
 
-    headers = ["#", "Hora", "OAE focal", "Intd.", "Modo", "Orig.(km)", "Alt.(km)", "Var.(%)"]
-    widths  = [ 8,    18,     34,           14,     20,      24,           24,         20]
+    headers = ["#", "Hora", "OAE focal", "Lat / Lon", "Intd.", "Modo", "Orig.(km)", "Alt.(km)", "Var.(%)"]
+    widths  = [ 8,    16,     30,            42,           10,     14,      20,           20,         18]
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_fill_color(220, 230, 240)
     for h, w in zip(headers, widths):
@@ -2129,11 +2148,15 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
             var = f"+{(s['dist_alt_m'] - s['dist_orig_m']) / s['dist_orig_m'] * 100:.1f}%"
         elif not s["tem_alt"]:
             var = "sem rota"
-        focal = s.get("oae_focal", "—")
+        focal = s.get("oae_focal", "-")
+        flat = s.get("oae_focal_lat")
+        flon = s.get("oae_focal_lon")
+        latlon = f"{flat:.5f}, {flon:.5f}" if flat is not None and flon is not None else "-"
         row = [
             str(i),
             hora,
-            focal[:18],
+            focal[:17],
+            latlon,
             str(len(s["interdicao"])),
             s["modo"],
             f"{s['dist_orig_m']/1000:.2f}" if s["dist_orig_m"] else "-",
@@ -2192,41 +2215,54 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     # ----- Metodologia -----
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_fill_color(240, 240, 245)
-    pdf.cell(0, 6, _txt(" Metodologia"), fill=True, ln=True)
-    pdf.ln(1)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(0, 4.5, _txt(
+    pdf.cell(0, 5.5, _txt(" Metodologia"), fill=True, ln=True)
+    pdf.ln(0.5)
+    pdf.set_font("Helvetica", "", 8.5)
+    # Line-height reduzido (3.8) e parágrafos com espaço menor para caber em 1 página
+    pdf.multi_cell(0, 3.8, _txt(
         "Escopo: ANÁLISE DE IMPACTO LOCAL. Cada simulação responde à pergunta "
         "'quanto uma viagem que precisa atravessar a OAE focal rodaria a mais "
         "caso ela esteja interditada?'. Origem e destino são pontos sintéticos "
-        "da própria via — não representam fluxos reais de O/D urbanos. "
-        "Portanto, os resultados refletem a CRITICIDADE INDIVIDUAL da obra para "
-        "a conectividade local, não o impacto sistêmico sobre viagens reais.\n\n"
-        "1) A rede viária é obtida do OpenStreetMap dentro de um raio configurável em "
-        "torno do centroide das OAEs interditadas, ou substituída por uma rede "
-        "simplificada (conexão por vizinhos mais próximos) quando o OSM não está disponível.\n\n"
-        "2) Para cada OAE interditada, todas as arestas do grafo cuja geometria passa "
-        "a menos de 100 m do ponto da OAE são removidas (bloqueio cirúrgico: captura "
-        "as pistas duplicadas e a estrutura da obra sem desconectar intersecções vizinhas).\n\n"
-        "3) Para a OAE focal, origem e destino são derivados automaticamente como nós "
-        "do grafo OSM em lados opostos da obra (faixa de 30 m a 3 km), com ângulos "
-        "preferencialmente opostos a partir do ponto da OAE.\n\n"
-        "4) O caminho mínimo é calculado pelo algoritmo Dijkstra (NetworkX) usando o "
-        "comprimento das vias como peso das arestas. A distância apresentada é em "
-        "metros (convertida para km no relatório).\n\n"
-        "5) A criticidade de uma OAE é estimada de forma empírica a partir do "
-        "aumento percentual médio de distância nos cenários em que ela foi "
-        "interditada. Trata-se de um indicador relativo de impacto local, não absoluto "
-        "e não representa o impacto sobre viagens de origem/destino urbanas reais."
+        "da própria via - não representam fluxos reais de O/D urbanos. "
+        "Os resultados refletem a CRITICIDADE INDIVIDUAL da obra para a "
+        "conectividade local, não o impacto sistêmico sobre viagens reais."
     ))
-    pdf.ln(2)
+    pdf.ln(1.2)
+    pdf.multi_cell(0, 3.8, _txt(
+        "1) Rede viária obtida do OpenStreetMap num raio configurável em torno do "
+        "centroide das OAEs interditadas, ou substituída por uma rede simplificada "
+        "(vizinhos mais próximos) quando o OSM está indisponível."
+    ))
+    pdf.ln(0.8)
+    pdf.multi_cell(0, 3.8, _txt(
+        "2) Para cada OAE interditada, todas as arestas cuja geometria passa a menos "
+        "de 100 m do ponto da OAE são removidas (bloqueio cirúrgico: captura pistas "
+        "duplicadas e a estrutura da obra sem desconectar intersecções vizinhas)."
+    ))
+    pdf.ln(0.8)
+    pdf.multi_cell(0, 3.8, _txt(
+        "3) Para a OAE focal, origem e destino são derivados automaticamente como nós "
+        "do grafo OSM em lados opostos da obra (30 m a 3 km), com ângulos "
+        "preferencialmente opostos a partir da OAE."
+    ))
+    pdf.ln(0.8)
+    pdf.multi_cell(0, 3.8, _txt(
+        "4) Caminho mínimo calculado pelo algoritmo Dijkstra (NetworkX) com "
+        "comprimento das vias como peso. Distâncias em metros (convertidas para km)."
+    ))
+    pdf.ln(0.8)
+    pdf.multi_cell(0, 3.8, _txt(
+        "5) Criticidade estimada empiricamente pelo aumento percentual médio de "
+        "distância nos cenários em que a OAE foi interditada - indicador relativo "
+        "de impacto local."
+    ))
 
-    # ----- Rodapé -----
-    pdf.set_y(-15)
-    pdf.set_font("Helvetica", "I", 8)
+    # ----- Rodapé (posicionado relativo ao conteúdo, não fixo no fim da página) -----
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "I", 7.5)
     pdf.set_text_color(120, 120, 130)
     pdf.cell(
-        0, 5,
+        0, 4,
         _txt(f"Gerado por OAE-SIM v0.1 em {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}  ·  "
              f"github.com/luizaraujoengkil-ux/simulador-resiliencia-oae"),
         align="C",
