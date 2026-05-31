@@ -1710,17 +1710,19 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             unsafe_allow_html=True,
         )
 
-        # ---- OAE focal para análise OD ----
-        # Substitui o antigo OAE→OAE: a origem é um ponto a JUSANTE da OAE e o
-        # destino um ponto a MONTANTE, derivados do nó OSM da OAE focal.
-        st.sidebar.subheader("Foco da análise")
+        # ---- OAE focal para análise de impacto local ----
+        # Modelo: a simulação mede quanto um veículo que PRECISA cruzar esta OAE
+        # rodaria a mais caso ela esteja interditada. Origem/destino são pontos
+        # sintéticos da própria via, ~30–300 m de cada lado da OAE focal.
+        st.sidebar.subheader("Análise de impacto local")
         if not interdicao:
             st.sidebar.markdown(
                 """
                 <div class="empty-state" style="padding:0.8rem;text-align:left;">
                     <div class="small-text">
                         Selecione ao menos 1 OAE interditada acima.
-                        Origem e destino são <b>derivados automaticamente</b> da OAE focal.
+                        Os pontos de origem e destino da análise são derivados
+                        <b>automaticamente</b> dos lados da OAE focal.
                     </div>
                 </div>
                 """,
@@ -1730,18 +1732,20 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             destino = None
         else:
             origem = st.sidebar.selectbox(
-                "OAE focal (define origem/destino)",
+                "OAE focal da análise",
                 interdicao,
-                help="A simulação calcula a rota entre um ponto a jusante e outro a montante "
-                     "dessa OAE no grafo OSM. Útil para isolar o impacto desta obra específica.",
+                help="A simulação responde: 'se eu PRECISASSE atravessar esta OAE, "
+                     "quanto a viagem ficaria mais longa caso ela esteja interditada?'. "
+                     "Origem e destino são pontos sintéticos da própria via, em lados "
+                     "opostos da OAE — não representam viagens reais de origem/destino "
+                     "urbanas.",
                 key="oae_focal_sel",
             )
-            # Mantemos a chave 'destino' por compatibilidade com o restante do código,
-            # mas neste modo ela representa a mesma OAE focal (OD é derivado dela).
+            # Mantemos a chave 'destino' por compatibilidade com o restante do código.
             destino = origem
             st.sidebar.caption(
-                "ℹ️ Os pontos de origem e destino são pontos da via — antes e depois da OAE focal — "
-                "calculados automaticamente no momento da simulação."
+                "ℹ️ **Escopo:** impacto local da travessia. Origem e destino são "
+                "calculados em pontos da via, de ~30 a 300 m de cada lado da OAE focal."
             )
 
         # ---- Executar simulação + contador ----
@@ -1992,22 +1996,23 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     )
     folium.Marker(
         [o_lat, o_lon],
-        tooltip=f"Origem (a jusante de {oae_focal})",
+        tooltip=f"Ponto de simulação · lado A da {oae_focal}",
         icon=folium.Icon(color="green", icon="play", prefix="fa"),
     ).add_to(mapa)
     folium.Marker(
         [d_lat, d_lon],
-        tooltip=f"Destino (a montante de {oae_focal})",
+        tooltip=f"Ponto de simulação · lado B da {oae_focal}",
         icon=folium.Icon(color="red", icon="flag-checkered", prefix="fa"),
     ).add_to(mapa)
     st_folium(mapa, width=None, height=560, returned_objects=[])
 
     st.caption(
-        f"**Modo de cálculo:** {modo_usado}  ·  "
-        f"**OAE focal:** {oae_focal}  ·  "
-        "🔵 **Malha viária** (rede OSM)  ·  "
-        "🔴 **Rota original** afetada pela interdição (tracejada)  ·  "
-        "🟢 **Rota alternativa** proposta."
+        f"**Análise de impacto local:** quanto uma viagem que **atravessa a "
+        f"{oae_focal}** rodaria a mais caso ela esteja interditada. Origem e destino "
+        f"são pontos sintéticos da via (não representam fluxos reais de O/D).  ·  "
+        f"**Modo:** {modo_usado}  ·  "
+        "🔵 Malha OSM  ·  🔴 Rota original (tracejada, passa pela OAE)  ·  "
+        "🟢 Rota alternativa (proposta após interdição)."
     )
 
     return {
@@ -2191,17 +2196,28 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.ln(1)
     pdf.set_font("Helvetica", "", 9)
     pdf.multi_cell(0, 4.5, _txt(
+        "Escopo: ANÁLISE DE IMPACTO LOCAL. Cada simulação responde à pergunta "
+        "'quanto uma viagem que precisa atravessar a OAE focal rodaria a mais "
+        "caso ela esteja interditada?'. Origem e destino são pontos sintéticos "
+        "da própria via — não representam fluxos reais de O/D urbanos. "
+        "Portanto, os resultados refletem a CRITICIDADE INDIVIDUAL da obra para "
+        "a conectividade local, não o impacto sistêmico sobre viagens reais.\n\n"
         "1) A rede viária é obtida do OpenStreetMap dentro de um raio configurável em "
-        "torno do centroide das OAEs, ou substituída por uma rede simplificada "
-        "(conexão por vizinhos mais próximos) quando o OSM não está disponível.\n\n"
-        "2) Cada OAE interditada é mapeada para o nó mais próximo do grafo, e esses "
-        "nós são removidos antes do cálculo do caminho alternativo.\n\n"
-        "3) O caminho mínimo é calculado pelo algoritmo Dijkstra (NetworkX) usando o "
+        "torno do centroide das OAEs interditadas, ou substituída por uma rede "
+        "simplificada (conexão por vizinhos mais próximos) quando o OSM não está disponível.\n\n"
+        "2) Para cada OAE interditada, todas as arestas do grafo cuja geometria passa "
+        "a menos de 100 m do ponto da OAE são removidas (bloqueio cirúrgico: captura "
+        "as pistas duplicadas e a estrutura da obra sem desconectar intersecções vizinhas).\n\n"
+        "3) Para a OAE focal, origem e destino são derivados automaticamente como nós "
+        "do grafo OSM em lados opostos da obra (faixa de 30 m a 3 km), com ângulos "
+        "preferencialmente opostos a partir do ponto da OAE.\n\n"
+        "4) O caminho mínimo é calculado pelo algoritmo Dijkstra (NetworkX) usando o "
         "comprimento das vias como peso das arestas. A distância apresentada é em "
         "metros (convertida para km no relatório).\n\n"
-        "4) A criticidade de uma OAE é estimada de forma empírica a partir do "
+        "5) A criticidade de uma OAE é estimada de forma empírica a partir do "
         "aumento percentual médio de distância nos cenários em que ela foi "
-        "interditada. Trata-se de um indicador relativo, não absoluto."
+        "interditada. Trata-se de um indicador relativo de impacto local, não absoluto "
+        "e não representa o impacto sobre viagens de origem/destino urbanas reais."
     ))
     pdf.ln(2)
 
