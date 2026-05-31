@@ -1109,6 +1109,45 @@ def _nos_dentro_raio(G, lat: float, lon: float, raio_m: float) -> set[int]:
     return nos
 
 
+def _arestas_dentro_raio(G, lat: float, lon: float, raio_m: float) -> set[tuple]:
+    """Retorna o conjunto de arestas (u, v, key) cuja geometria passa a menos
+    de `raio_m` metros do ponto (lat, lon).
+
+    Usa shapely para distância ponto-segmento. Funciona com arestas que têm
+    geometria explícita (LineString) ou apenas straight line entre nós.
+    """
+    from shapely.geometry import Point, LineString
+
+    pt = Point(lon, lat)
+    # Conversão graus → metros (aproximada para a latitude local)
+    lat_rad = math.radians(lat)
+    metros_por_grau_lat = 111_320.0
+    metros_por_grau_lon = 111_320.0 * math.cos(lat_rad)
+    metros_por_grau = (metros_por_grau_lat + metros_por_grau_lon) / 2.0
+    raio_graus = raio_m / metros_por_grau
+
+    arestas = set()
+    for u, v, key, data in G.edges(keys=True, data=True):
+        geom = data.get("geometry")
+        if geom is None:
+            try:
+                geom = LineString(
+                    [
+                        (G.nodes[u]["x"], G.nodes[u]["y"]),
+                        (G.nodes[v]["x"], G.nodes[v]["y"]),
+                    ]
+                )
+            except (KeyError, TypeError):
+                continue
+        try:
+            d_graus = geom.distance(pt)
+        except Exception:
+            continue
+        if d_graus <= raio_graus:
+            arestas.add((u, v, key))
+    return arestas
+
+
 def _auto_od_da_oae(
     G,
     oae_lat: float,
@@ -1323,12 +1362,30 @@ def calcular_rota_osm(
     origem: tuple[float, float],
     destino: tuple[float, float],
     nos_remover: set[int] | None = None,
+    arestas_remover: set[tuple] | None = None,
 ) -> tuple[list[tuple[float, float]], float]:
-    """Calcula caminho mais curto. Retorna (coords [(lat,lon)...], distancia_m)."""
+    """Calcula caminho mais curto. Retorna (coords [(lat,lon)...], distancia_m).
+
+    Tanto nós quanto arestas podem ser removidos antes do cálculo. Para
+    interdição cirúrgica de pontes/viadutos, prefira remover arestas
+    (mantém os nós das intersecções acessíveis por outras vias).
+    """
     H = G
-    if nos_remover:
+    if nos_remover or arestas_remover:
         H = G.copy()
-        H.remove_nodes_from([n for n in nos_remover if n in H.nodes])
+        if nos_remover:
+            H.remove_nodes_from([n for n in nos_remover if n in H.nodes])
+        if arestas_remover:
+            for edge in arestas_remover:
+                # edge é (u, v, key)
+                if len(edge) == 3:
+                    u, v, k = edge
+                    if H.has_edge(u, v, k):
+                        H.remove_edge(u, v, k)
+                else:
+                    u, v = edge[0], edge[1]
+                    if H.has_edge(u, v):
+                        H.remove_edge(u, v)
 
     o = _no_mais_proximo(H, *origem)
     d = _no_mais_proximo(H, *destino)
@@ -1820,24 +1877,31 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
                     f"Origem a **{d_o:.0f} m** da OAE · Destino a **{d_d:.0f} m**"
                 )
 
-                st.write("• Mapeando OAEs interditadas (raio de bloqueio = 50 m)...")
-                # Remove TODOS os nós num raio de 50m de cada OAE — captura a
-                # ponte inteira, incluindo pistas duplicadas e nós intermediários.
-                raio_bloqueio_m = 50.0
-                nos_remover: set[int] = set()
+                st.write("• Identificando arestas a bloquear (raio = 100 m)...")
+                # Removemos ARESTAS (não nós): isola exatamente as faixas da
+                # ponte sem desconectar intersecções vizinhas. Captura corretamente
+                # pistas duplicadas (avenida ida+volta) e geometrias curvas.
+                raio_bloqueio_m = 100.0
+                arestas_remover: set[tuple] = set()
                 for cod in interdicao:
                     lat, lon = obter_ponto(df, cod)
-                    bloco = _nos_dentro_raio(G_osm, lat, lon, raio_bloqueio_m)
-                    nos_remover |= bloco
+                    bloco = _arestas_dentro_raio(G_osm, lat, lon, raio_bloqueio_m)
+                    arestas_remover |= bloco
                 st.write(
-                    f"  ✓ {len(nos_remover)} nó(s) marcado(s) para remoção "
-                    f"({len(interdicao)} OAE(s) × ~{len(nos_remover)//max(1,len(interdicao))} nós cada)."
+                    f"  ✓ {len(arestas_remover)} aresta(s) marcada(s) para remoção "
+                    f"({len(interdicao)} OAE(s) × ~{len(arestas_remover)//max(1,len(interdicao))} arestas cada)."
                 )
+                # `nos_remover` mantido vazio (apenas para compat)
+                nos_remover: set[int] = set()
 
                 st.write("• Calculando rota base (sem interdição)...")
                 coords_orig, dist_orig = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon))
                 st.write("• Calculando rota alternativa (com interdição)...")
-                coords_alt, dist_alt = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon), nos_remover)
+                coords_alt, dist_alt = calcular_rota_osm(
+                    G_osm, (o_lat, o_lon), (d_lat, d_lon),
+                    nos_remover=nos_remover,
+                    arestas_remover=arestas_remover,
+                )
 
                 st.write("• Extraindo malha viária para visualização...")
                 malha_geojson = _extrair_malha_geojson(G_osm)
