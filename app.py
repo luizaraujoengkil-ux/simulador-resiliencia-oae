@@ -688,8 +688,8 @@ def padronizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
     df["Rodovia / Trecho"] = df["Rodovia / Trecho"].fillna("Não informado").astype(str)
 
     if "Tipo" not in df.columns:
-        df["Tipo"] = "OAE"
-    df["Tipo"] = df["Tipo"].fillna("OAE").astype(str)
+        df["Tipo"] = "Ponte"
+    df["Tipo"] = df["Tipo"].fillna("Ponte").astype(str)
 
     # Deduplica códigos
     if df["Código OAE"].duplicated().any():
