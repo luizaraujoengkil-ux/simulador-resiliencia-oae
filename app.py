@@ -1096,6 +1096,107 @@ def desenhar_mapa(
     return m
 
 
+@st.cache_data(ttl=60 * 60 * 24, show_spinner=False)
+def _reverse_geocode(lat: float, lon: float) -> dict | None:
+    """Reverse geocoding via Nominatim (OpenStreetMap). Cacheado por 24 h.
+
+    Devolve o dict `address` completo retornado pela API, ou None em caso de erro.
+    Respeita o uso aceitável: User-Agent identificável, 1 req/s no caller.
+    """
+    try:
+        from geopy.geocoders import Nominatim
+        geolocator = Nominatim(
+            user_agent="simulador-resiliencia-oae/0.1 (github.com/luizaraujoengkil-ux/simulador-resiliencia-oae)",
+            timeout=10,
+        )
+        location = geolocator.reverse(f"{lat}, {lon}", language="pt-BR", zoom=17)
+        if location and isinstance(location.raw, dict):
+            return location.raw.get("address") or {}
+    except Exception:
+        return None
+    return None
+
+
+def enriquecer_geocodificacao(df: pd.DataFrame) -> pd.DataFrame:
+    """Preenche Município/UF e Rodovia/Trecho ausentes via Nominatim.
+
+    Só preenche linhas onde o campo está vazio ou 'Não informado'. Respeita
+    o rate limit de 1 req/s do Nominatim (sleep entre chamadas).
+    """
+    import time as _time
+
+    df = df.copy()
+    if "Município / UF" not in df.columns:
+        df["Município / UF"] = "Não informado"
+    if "Rodovia / Trecho" not in df.columns:
+        df["Rodovia / Trecho"] = "Não informado"
+
+    def _vazio(s: object) -> bool:
+        return str(s).strip().lower() in ("", "nan", "none", "não informado", "nao informado")
+
+    progress_bar = st.progress(0.0, text="Iniciando geocodificação...")
+    n_atualizados = {"municipio": 0, "rodovia": 0}
+
+    total = len(df)
+    for i, idx in enumerate(df.index):
+        precisa_mun = _vazio(df.at[idx, "Município / UF"])
+        precisa_rod = _vazio(df.at[idx, "Rodovia / Trecho"])
+        if not (precisa_mun or precisa_rod):
+            progress_bar.progress((i + 1) / total, text=f"({i+1}/{total}) já preenchido, pulando")
+            continue
+
+        codigo = str(df.at[idx, "Código OAE"])
+        try:
+            lat = float(df.at[idx, "Latitude"])
+            lon = float(df.at[idx, "Longitude"])
+        except (TypeError, ValueError):
+            continue
+
+        progress_bar.progress(
+            (i + 0.5) / total,
+            text=f"({i+1}/{total}) Buscando {codigo} no OSM...",
+        )
+        addr = _reverse_geocode(lat, lon)
+
+        if addr:
+            if precisa_mun:
+                cidade = (
+                    addr.get("city")
+                    or addr.get("town")
+                    or addr.get("village")
+                    or addr.get("municipality")
+                    or addr.get("suburb")
+                )
+                uf = (
+                    (addr.get("ISO3166-2-lvl4", "").split("-")[-1] if addr.get("ISO3166-2-lvl4") else "")
+                    or addr.get("state_code", "")
+                )
+                if cidade:
+                    df.at[idx, "Município / UF"] = f"{cidade} / {uf}" if uf else cidade
+                    n_atualizados["municipio"] += 1
+            if precisa_rod:
+                ref = (addr.get("ref") or "").strip()
+                road = (addr.get("road") or "").strip()
+                if ref and road:
+                    df.at[idx, "Rodovia / Trecho"] = f"{ref} / {road}"
+                elif ref:
+                    df.at[idx, "Rodovia / Trecho"] = ref
+                elif road:
+                    df.at[idx, "Rodovia / Trecho"] = road
+                if df.at[idx, "Rodovia / Trecho"] not in ("Não informado", "nan", ""):
+                    n_atualizados["rodovia"] += 1
+
+        progress_bar.progress((i + 1) / total, text=f"({i+1}/{total}) {codigo} ok")
+        _time.sleep(1.05)  # rate limit do Nominatim: 1 req/s
+
+    progress_bar.empty()
+    st.success(
+        f"✓ Geocodificação concluída: **{n_atualizados['municipio']}** município(s) e "
+        f"**{n_atualizados['rodovia']}** rodovia(s) preenchidos via OSM."
+    )
+    return df
+
+
 def _nos_dentro_raio(G, lat: float, lon: float, raio_m: float) -> set[int]:
     """Retorna o conjunto de nós OSM dentro de `raio_m` metros de (lat, lon)."""
     nos = set()
@@ -2460,6 +2561,43 @@ def main() -> None:
         f"Dados que estão sendo usados na simulação — {len(df)} OAEs carregadas. "
         f"Confira aqui se a base bate com o que você espera antes de rodar o cenário."
     )
+
+    # Botão de enriquecimento via reverse geocoding (Nominatim/OSM)
+    def _campos_faltantes(d):
+        n_mun = (
+            d["Município / UF"]
+            .astype(str).str.strip().str.lower()
+            .isin(["", "nan", "none", "não informado", "nao informado"])
+            .sum()
+        )
+        n_rod = (
+            d["Rodovia / Trecho"]
+            .astype(str).str.strip().str.lower()
+            .isin(["", "nan", "none", "não informado", "nao informado"])
+            .sum()
+        )
+        return int(n_mun), int(n_rod)
+
+    n_mun_faltam, n_rod_faltam = _campos_faltantes(df)
+    if n_mun_faltam or n_rod_faltam:
+        col_btn, col_help = st.columns([2, 5])
+        if col_btn.button(
+            f"🌐 Preencher dados faltantes ({n_mun_faltam + n_rod_faltam})",
+            use_container_width=True,
+            help="Consulta o OpenStreetMap (Nominatim) pra preencher "
+                 "Município/UF e Rodovia/Trecho a partir da lat/lon de cada OAE. "
+                 "Leva ~1 segundo por OAE (rate limit do Nominatim).",
+            key="btn_geocode",
+        ):
+            df_enriquecido = enriquecer_geocodificacao(df)
+            st.session_state["df"] = df_enriquecido
+            st.rerun()
+        col_help.caption(
+            f"💡 **{n_mun_faltam}** Município(s)/UF e **{n_rod_faltam}** Rodovia(s)/Trecho "
+            "podem ser preenchidos automaticamente via OSM. Tempo estimado: "
+            f"~{max(1, len(df))} segundo(s)."
+        )
+
     cols_show = [c for c in COLUNAS_OBRIGATORIAS + COLUNAS_OPCIONAIS if c in df.columns]
     st.dataframe(df[cols_show], use_container_width=True, hide_index=True, height=300)
 
