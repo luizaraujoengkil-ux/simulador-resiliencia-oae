@@ -1096,67 +1096,81 @@ def desenhar_mapa(
     return m
 
 
+def _nos_dentro_raio(G, lat: float, lon: float, raio_m: float) -> set[int]:
+    """Retorna o conjunto de nós OSM dentro de `raio_m` metros de (lat, lon)."""
+    nos = set()
+    for n, data in G.nodes(data=True):
+        try:
+            d = _haversine_m(lat, lon, data["y"], data["x"])
+        except (KeyError, TypeError):
+            continue
+        if d <= raio_m:
+            nos.add(n)
+    return nos
+
+
 def _auto_od_da_oae(
     G,
     oae_lat: float,
     oae_lon: float,
+    raio_min_m: float = 60.0,
+    raio_max_m: float = 400.0,
 ) -> tuple[tuple[float, float], tuple[float, float]] | None:
     """Deriva par (Origem, Destino) automaticamente para uma OAE no grafo OSM.
 
-    Lógica: encontra o nó da rede mais próximo da OAE, lista seus vizinhos
-    (sucessores + predecessores) e escolhe o par cujos ângulos são mais opostos
-    (próximo de 180°) — ou seja, o "antes" e "depois" da OAE no eixo da via.
+    Estratégia: busca nós que estão entre `raio_min_m` e `raio_max_m` da OAE
+    (fora da zona de remoção, mas perto o suficiente para serem "as duas margens")
+    e escolhe o par cujos ângulos a partir da OAE são mais opostos.
+
+    Isso garante que origem e destino fiquem **fora da área que será removida**
+    quando a OAE for interditada, e que estejam de **lados opostos** da obra.
 
     Retorna ((origem_lat, origem_lon), (destino_lat, destino_lon)) ou None.
     """
-    no = _no_mais_proximo(G, oae_lat, oae_lon)
-    if no is None:
-        return None
-
-    # Conjunto de vizinhos (grafo direcionado: union de sucessores e predecessores)
-    try:
-        vizinhos = set(G.successors(no)) | set(G.predecessors(no))
-    except Exception:
-        return None
-    vizinhos.discard(no)
-    if not vizinhos:
-        return None
-
-    no_y = G.nodes[no]["y"]
-    no_x = G.nodes[no]["x"]
-
-    angulos: dict[int, float] = {}
-    for v in vizinhos:
+    candidatos: list[tuple[int, float, float]] = []  # (nó, distância_m, ângulo)
+    for n, data in G.nodes(data=True):
         try:
-            vy = G.nodes[v]["y"]
-            vx = G.nodes[v]["x"]
-        except KeyError:
+            d = _haversine_m(oae_lat, oae_lon, data["y"], data["x"])
+        except (KeyError, TypeError):
             continue
-        angulos[v] = math.atan2(vy - no_y, vx - no_x)
+        if raio_min_m <= d <= raio_max_m:
+            ang = math.atan2(data["y"] - oae_lat, data["x"] - oae_lon)
+            candidatos.append((n, d, ang))
 
-    if not angulos:
+    # Fallback progressivo: se nada na faixa principal, expande a busca
+    if not candidatos:
+        for raio in (600.0, 1000.0, 2000.0):
+            for n, data in G.nodes(data=True):
+                try:
+                    d = _haversine_m(oae_lat, oae_lon, data["y"], data["x"])
+                except (KeyError, TypeError):
+                    continue
+                if raio_min_m <= d <= raio:
+                    ang = math.atan2(data["y"] - oae_lat, data["x"] - oae_lon)
+                    candidatos.append((n, d, ang))
+            if candidatos:
+                break
+
+    if not candidatos:
         return None
 
-    # Par de vizinhos cuja diferença angular é mais próxima de π (eixo da via)
-    melhor_diff = -1.0
+    # Par com ângulos mais opostos (preferindo nós mais próximos do raio_min)
+    melhor_score = -1.0
     melhor_par: tuple[int, int] | None = None
-    items = list(angulos.items())
-    for i, (a, ang_a) in enumerate(items):
-        for b, ang_b in items[i + 1:]:
-            diff = abs(ang_a - ang_b)
+    for i, (n1, d1, a1) in enumerate(candidatos):
+        for n2, d2, a2 in candidatos[i + 1:]:
+            diff = abs(a1 - a2)
             if diff > math.pi:
                 diff = 2 * math.pi - diff
-            if diff > melhor_diff:
-                melhor_diff = diff
-                melhor_par = (a, b)
+            # score: diferença angular (max π) - penaliza distância média
+            # (preferimos pontos próximos e bem opostos)
+            score = diff - 0.0005 * (d1 + d2)
+            if score > melhor_score:
+                melhor_score = score
+                melhor_par = (n1, n2)
 
     if melhor_par is None:
-        # Só 1 vizinho → usa o próprio nó da OAE como destino
-        v = next(iter(angulos))
-        return (
-            (G.nodes[v]["y"], G.nodes[v]["x"]),
-            (no_y, no_x),
-        )
+        return None
 
     a, b = melhor_par
     return (
@@ -1765,29 +1779,36 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
 
             # ----- Etapa 2: rotas -----
             if G_osm is not None:
-                st.write(f"• Derivando origem/destino a partir da OAE focal **{oae_focal}**...")
-                od = _auto_od_da_oae(G_osm, oae_lat, oae_lon)
+                st.write(f"• Derivando OD a partir da OAE focal **{oae_focal}** (faixa 60–400 m)...")
+                od = _auto_od_da_oae(G_osm, oae_lat, oae_lon, raio_min_m=60.0, raio_max_m=400.0)
                 if od is None:
                     status.update(label="❌ Não consegui derivar OD da OAE focal", state="error")
                     st.error(
-                        f"O nó OSM mais próximo de **{oae_focal}** não tem vizinhos suficientes "
-                        "para definir um par origem/destino. Tente outra OAE focal ou aumente o buffer."
+                        f"Não encontrei nós suficientes a 60–2000 m de **{oae_focal}** "
+                        "para definir origem/destino. Tente aumentar o buffer ou escolher outra OAE focal."
                     )
                     return None
                 (o_lat, o_lon), (d_lat, d_lon) = od
+                d_o = _haversine_m(oae_lat, oae_lon, o_lat, o_lon)
+                d_d = _haversine_m(oae_lat, oae_lon, d_lat, d_lon)
                 st.write(
-                    f"  ✓ Origem (a jusante): **({o_lat:.5f}, {o_lon:.5f})** · "
-                    f"Destino (a montante): **({d_lat:.5f}, {d_lon:.5f})**"
+                    f"  ✓ Origem a **{d_o:.0f} m** da OAE: ({o_lat:.5f}, {o_lon:.5f}) · "
+                    f"Destino a **{d_d:.0f} m**: ({d_lat:.5f}, {d_lon:.5f})"
                 )
 
-                st.write("• Mapeando OAEs interditadas para nós do grafo...")
+                st.write("• Mapeando OAEs interditadas (raio de bloqueio = 50 m)...")
+                # Remove TODOS os nós num raio de 50m de cada OAE — captura a
+                # ponte inteira, incluindo pistas duplicadas e nós intermediários.
+                raio_bloqueio_m = 50.0
                 nos_remover: set[int] = set()
                 for cod in interdicao:
                     lat, lon = obter_ponto(df, cod)
-                    no = _no_mais_proximo(G_osm, lat, lon)
-                    if no is not None:
-                        nos_remover.add(no)
-                st.write(f"  ✓ {len(nos_remover)} nó(s) marcado(s) para remoção.")
+                    bloco = _nos_dentro_raio(G_osm, lat, lon, raio_bloqueio_m)
+                    nos_remover |= bloco
+                st.write(
+                    f"  ✓ {len(nos_remover)} nó(s) marcado(s) para remoção "
+                    f"({len(interdicao)} OAE(s) × ~{len(nos_remover)//max(1,len(interdicao))} nós cada)."
+                )
 
                 st.write("• Calculando rota base (sem interdição)...")
                 coords_orig, dist_orig = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon))
