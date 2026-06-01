@@ -1614,9 +1614,12 @@ def cards_indicadores(
     dist_orig_m: float,
     dist_alt_m: float,
     tem_alt: bool,
+    raio_km: float | None = None,
 ) -> None:
     delta_m = (dist_alt_m - dist_orig_m) if (dist_orig_m and dist_alt_m) else 0.0
-    pct = (delta_m / dist_orig_m * 100) if dist_orig_m else 0.0
+    # NOVO: Impacto % = quanto da rota alternativa é DESVIO causado pela interdição
+    # Naturalmente bounded entre 0 e ~100%: 0=rotas iguais, 90%=alt é 10x maior, etc.
+    impacto_pct = (delta_m / dist_alt_m * 100) if dist_alt_m else 0.0
     fator = (dist_alt_m / dist_orig_m) if (dist_orig_m and dist_alt_m) else 0.0
 
     if not tem_alt:
@@ -1632,7 +1635,7 @@ def cards_indicadores(
         ("Distância original", _fmt_km(dist_orig_m)),
         ("Distância alternativa", _fmt_km(dist_alt_m) if tem_alt else "—"),
         ("Aumento", _fmt_km(delta_m) if tem_alt else "—"),
-        ("Variação %", f"{pct:+.1f}%" if tem_alt and dist_orig_m else "—"),
+        ("Impacto %", f"{impacto_pct:.1f}%" if tem_alt else "—"),
         ("Fator (×)", f"{fator:.2f}×" if tem_alt and dist_orig_m else "—"),
     ]
 
@@ -1645,14 +1648,24 @@ def cards_indicadores(
         )
     st.markdown(f"**Status da rede:** {status_html}", unsafe_allow_html=True)
 
+    # Sugestão clara quando NÃO ACHOU rota alternativa
+    if not tem_alt:
+        raio_txt = f"{raio_km:.1f} km" if raio_km else "configurado"
+        st.error(
+            f"❌ **Nenhuma rota alternativa encontrada** com raio de **{raio_txt}**. "
+            f"A área baixada do OSM pode ser pequena demais para revelar contornos. "
+            f"**Aumente o slider 'Buffer (km) ao redor da área de interesse' na sidebar** "
+            f"(tente 5-10 km) e rode a simulação novamente. "
+            f"Se preferir, pode remover esta tentativa do histórico depois — botão no relatório consolidado."
+        )
+
     # Aviso quando a baseline é curta: porcentagens viram extremas
     if tem_alt and 0 < dist_orig_m < 1000:
         st.warning(
-            f"⚠️ **Baseline curta** ({_fmt_km(dist_orig_m)}). A variação % pode "
-            f"parecer extrema — interprete priorizando o **aumento absoluto** "
-            f"({_fmt_km(delta_m)}) e o **fator** ({fator:.2f}×). "
-            f"Origem e destino derivados muito perto da OAE focal: ideal para "
-            f"medir impacto **hyperlocal** da obra."
+            f"⚠️ **Baseline curta** ({_fmt_km(dist_orig_m)}). Origem e destino "
+            f"foram derivados muito perto da OAE focal — ideal para medir impacto "
+            f"**hyperlocal**. Aumento absoluto: **{_fmt_km(delta_m)}**, "
+            f"Fator: **{fator:.2f}×**."
         )
 
 
@@ -1996,6 +2009,7 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     modo_usado = "simplificado"
     G_osm = None
     malha_geojson = None
+    raio_usado_m: float | None = None
     # Origem/destino são derivados automaticamente; começam com a posição da OAE
     o_lat = d_lat = oae_lat
     o_lon = d_lon = oae_lon
@@ -2015,6 +2029,7 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
                     st.write("  ✗ Não foi possível calcular a área — caindo para o simplificado.")
                 else:
                     centro_lat, centro_lon, raio_m = area
+                    raio_usado_m = raio_m
                     st.write(
                         f"• Área de interesse: centro **({centro_lat:.4f}, {centro_lon:.4f})**, "
                         f"raio **{raio_m/1000:.2f} km** (centroide das interditadas + buffer "
@@ -2148,6 +2163,7 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
         dist_orig_m=dist_orig,
         dist_alt_m=dist_alt if tem_alt else 0.0,
         tem_alt=tem_alt,
+        raio_km=(raio_usado_m / 1000.0) if raio_usado_m else None,
     )
 
     st.markdown("### 🗺️ Comparativo de rotas")
@@ -2214,6 +2230,7 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
         "dist_alt_m": float(dist_alt) if tem_alt else 0.0,
         "tem_alt": bool(tem_alt),
         "modo": modo_usado,
+        "raio_km": (raio_usado_m / 1000.0) if raio_usado_m else None,
     }
 
 
@@ -2284,10 +2301,11 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         for s in simulacoes
         if s["tem_alt"] and s["dist_orig_m"] > 0
     ]
+    # Impacto % = (alt - orig) / alt * 100 (bounded 0-100%)
     incrementos_pct = [
-        (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100.0
+        (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100.0
         for s in simulacoes
-        if s["tem_alt"] and s["dist_orig_m"] > 0
+        if s["tem_alt"] and s["dist_orig_m"] > 0 and s["dist_alt_m"] > 0
     ]
     avg_inc = sum(incrementos_km) / len(incrementos_km) if incrementos_km else 0
     max_inc = max(incrementos_km) if incrementos_km else 0
@@ -2304,8 +2322,8 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         f"({com_alt/len(simulacoes)*100:.1f}%)"
     ), ln=True)
     pdf.cell(0, 5, _txt(f"- Cenários sem rota alternativa: {sem_alt}"), ln=True)
-    pdf.cell(0, 5, _txt(f"- Aumento médio de distância: +{avg_inc:.2f} km ({avg_pct:+.1f}%)"), ln=True)
-    pdf.cell(0, 5, _txt(f"- Aumento máximo observado: +{max_inc:.2f} km ({max_pct:+.1f}%)"), ln=True)
+    pdf.cell(0, 5, _txt(f"- Aumento médio de distância: +{avg_inc:.2f} km (Impacto médio: {avg_pct:.1f}%)"), ln=True)
+    pdf.cell(0, 5, _txt(f"- Aumento máximo observado: +{max_inc:.2f} km (Impacto máximo: {max_pct:.1f}%)"), ln=True)
     pdf.ln(5)
 
     # ----- Detalhamento por simulação -----
@@ -2314,8 +2332,8 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.cell(72, 7, _txt(" Detalhamento das simulações"), fill=True, ln=True)
     pdf.ln(2)
 
-    headers = ["#", "Hora", "OAE focal", "Lat / Lon", "Int", "Modo", "Orig(km)", "Alt(km)", "Var.%", "Fator"]
-    widths  = [ 7,    13,     30,            36,           7,    12,      17,          17,        17,      16]
+    headers = ["#", "Hora", "OAE focal", "Lat / Lon", "Int", "Modo", "Orig(km)", "Alt(km)", "Imp.%", "Fator", "Raio"]
+    widths  = [ 7,    12,     28,            33,           7,    10,      16,          16,        15,      13,      14]
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_fill_color(220, 230, 240)
     for h, w in zip(headers, widths):
@@ -2325,13 +2343,14 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.set_font("Helvetica", "", 8.5)
     for i, s in enumerate(simulacoes, 1):
         hora = s["timestamp"].strftime("%H:%M:%S") if hasattr(s["timestamp"], "strftime") else str(s["timestamp"])
-        var = "-"
+        impacto = "-"
         fator = "-"
-        if s["tem_alt"] and s["dist_orig_m"] > 0:
-            var = f"+{(s['dist_alt_m'] - s['dist_orig_m']) / s['dist_orig_m'] * 100:.1f}%"
+        if s["tem_alt"] and s["dist_orig_m"] > 0 and s["dist_alt_m"] > 0:
+            # Impacto = (alt - orig) / alt × 100  (0% a ~100%, sempre)
+            impacto = f"{(s['dist_alt_m'] - s['dist_orig_m']) / s['dist_alt_m'] * 100:.1f}%"
             fator = f"{s['dist_alt_m'] / s['dist_orig_m']:.2f}x"
         elif not s["tem_alt"]:
-            var = "sem rota"
+            impacto = "sem rota"
         focal = s.get("oae_focal", "-")
         flat = s.get("oae_focal_lat")
         flon = s.get("oae_focal_lon")
@@ -2341,17 +2360,19 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         orig_str = f"{s['dist_orig_m']/1000:.2f}" if s["dist_orig_m"] else "-"
         if baseline_curta:
             orig_str = orig_str + "*"
+        raio_str = f"{s['raio_km']:.1f}" if s.get("raio_km") else "-"
         row = [
             str(i),
             hora,
-            focal[:17],
+            focal[:16],
             latlon,
             str(len(s["interdicao"])),
             s["modo"],
             orig_str,
             f"{s['dist_alt_m']/1000:.2f}" if s["tem_alt"] else "-",
-            var,
+            impacto,
             fator,
+            raio_str,
         ]
         for c, w in zip(row, widths):
             pdf.cell(w, 5.5, _txt(c), border=1, align="C")
@@ -2376,13 +2397,14 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.ln(4)
 
     # ----- Ranking de OAEs mais críticas -----
+    # Métrica: Impacto % = (alt - orig) / alt * 100 (bounded 0-100%)
     impactos: dict[str, list[float]] = {}
     for s in simulacoes:
-        if not s["tem_alt"] or s["dist_orig_m"] <= 0:
+        if not s["tem_alt"] or s["dist_orig_m"] <= 0 or s["dist_alt_m"] <= 0:
             continue
-        var_pct = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100.0
+        impacto_pct = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100.0
         for oae in s["interdicao"]:
-            impactos.setdefault(oae, []).append(var_pct)
+            impactos.setdefault(oae, []).append(impacto_pct)
 
     if impactos:
         pdf.set_font("Helvetica", "B", 13)
@@ -2391,15 +2413,16 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         pdf.ln(1)
         pdf.set_font("Helvetica", "I", 9)
         pdf.multi_cell(0, 4.5, _txt(
-            "Calculado como a variação percentual média de distância nos cenários "
-            "em que cada OAE foi marcada como interditada. Quanto maior o valor, "
-            "mais crítica é a OAE para a resiliência da rede."
+            "Calculado como o Impacto medio nos cenarios em que cada OAE foi "
+            "interditada. Impacto = (rota alternativa - rota original) / rota "
+            "alternativa x 100, naturalmente bounded entre 0% e 100%. Quanto maior, "
+            "mais critica e a OAE para a resiliencia da rede."
         ))
         pdf.ln(1.5)
 
         ranked = sorted(impactos.items(), key=lambda x: -sum(x[1]) / len(x[1]))
-        rank_headers = ["Posição", "Código OAE", "Aparições", "Var. média (%)", "Var. máxima (%)"]
-        rank_widths  = [16,         60,           18,           28,                28]
+        rank_headers = ["Posição", "Código OAE", "Aparições", "Impacto médio (%)", "Impacto máx (%)"]
+        rank_widths  = [16,         60,           18,           30,                  26]
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(220, 230, 240)
         for h, w in zip(rank_headers, rank_widths):
@@ -2411,8 +2434,8 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
                 f"{pos}",
                 oae,
                 str(len(vars_)),
-                f"+{sum(vars_)/len(vars_):.1f}%",
-                f"+{max(vars_):.1f}%",
+                f"{sum(vars_)/len(vars_):.1f}%",
+                f"{max(vars_):.1f}%",
             ]
             for c, w in zip(row, rank_widths):
                 pdf.cell(w, 5.5, _txt(c), border=1, align="C")
@@ -2781,16 +2804,21 @@ def main() -> None:
                 "Modo": s["modo"],
                 "Dist. orig. (km)": round(s["dist_orig_m"] / 1000, 2) if s["dist_orig_m"] else None,
                 "Dist. alt. (km)":  round(s["dist_alt_m"]  / 1000, 2) if s["tem_alt"] else None,
-                "Var. (%)": (
-                    round((s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100, 1)
-                    if s["tem_alt"] and s["dist_orig_m"] else None
+                "Impacto (%)": (
+                    round((s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100, 1)
+                    if s["tem_alt"] and s["dist_alt_m"] else None
                 ),
                 "Fator (×)": (
                     round(s["dist_alt_m"] / s["dist_orig_m"], 2)
                     if s["tem_alt"] and s["dist_orig_m"] else None
                 ),
-                "Baseline curta?": (
-                    "⚠️ <1km" if s["tem_alt"] and 0 < s["dist_orig_m"] < 1000 else ""
+                "Raio (km)": (
+                    round(s["raio_km"], 1) if s.get("raio_km") else None
+                ),
+                "Status": (
+                    "❌ sem rota" if not s["tem_alt"]
+                    else "⚠️ baseline curta" if 0 < s["dist_orig_m"] < 1000
+                    else "✓"
                 ),
             }
             for i, s in enumerate(simulacoes)
@@ -2816,6 +2844,46 @@ def main() -> None:
         if col_clear.button("🧹 Limpar histórico", use_container_width=True, key="btn_clear_hist"):
             st.session_state["simulacoes"] = []
             st.session_state["sim_count"] = 0
+            st.rerun()
+
+        # ----- Remover simulações específicas (sem rota, individuais) -----
+        st.markdown("**Remover simulações do histórico**")
+        sims_sem_rota_idx = [i for i, s in enumerate(simulacoes) if not s["tem_alt"]]
+        c1, c2, c3 = st.columns([2, 3, 1])
+        if c1.button(
+            f"🗑️ Remover {len(sims_sem_rota_idx)} sem-rota",
+            use_container_width=True,
+            disabled=not sims_sem_rota_idx,
+            help="Remove de uma vez todas as simulações que falharam (sem rota alternativa). "
+                 "Útil pra limpar tentativas com raio muito pequeno antes de gerar o PDF.",
+            key="btn_rm_sem_rota",
+        ):
+            st.session_state["simulacoes"] = [s for s in simulacoes if s["tem_alt"]]
+            st.session_state["sim_count"] = len(st.session_state["simulacoes"])
+            st.rerun()
+
+        opcoes_remover = [
+            f"#{i+1} · {s.get('oae_focal', '?')[:25]} · "
+            f"{s['timestamp'].strftime('%H:%M:%S') if hasattr(s['timestamp'], 'strftime') else ''}"
+            f"{' [SEM ROTA]' if not s['tem_alt'] else ''}"
+            for i, s in enumerate(simulacoes)
+        ]
+        sim_a_remover = c2.selectbox(
+            "Remover individual:",
+            options=["— escolha uma simulação —"] + opcoes_remover,
+            label_visibility="collapsed",
+            key="sb_rm_individual",
+        )
+        if c3.button(
+            "🗑️",
+            disabled=(sim_a_remover == "— escolha uma simulação —"),
+            help="Remove a simulação selecionada do histórico.",
+            key="btn_rm_individual",
+            use_container_width=True,
+        ):
+            idx = opcoes_remover.index(sim_a_remover)
+            del st.session_state["simulacoes"][idx]
+            st.session_state["sim_count"] = len(st.session_state["simulacoes"])
             st.rerun()
 
     # ----- Rodapé com autor e licença -----
