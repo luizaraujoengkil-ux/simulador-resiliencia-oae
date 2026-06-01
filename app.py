@@ -1617,6 +1617,7 @@ def cards_indicadores(
 ) -> None:
     delta_m = (dist_alt_m - dist_orig_m) if (dist_orig_m and dist_alt_m) else 0.0
     pct = (delta_m / dist_orig_m * 100) if dist_orig_m else 0.0
+    fator = (dist_alt_m / dist_orig_m) if (dist_orig_m and dist_alt_m) else 0.0
 
     if not tem_alt:
         status_html = '<span class="status-fail">Sem rota alternativa detectada</span>'
@@ -1632,6 +1633,7 @@ def cards_indicadores(
         ("Distância alternativa", _fmt_km(dist_alt_m) if tem_alt else "—"),
         ("Aumento", _fmt_km(delta_m) if tem_alt else "—"),
         ("Variação %", f"{pct:+.1f}%" if tem_alt and dist_orig_m else "—"),
+        ("Fator (×)", f"{fator:.2f}×" if tem_alt and dist_orig_m else "—"),
     ]
 
     cols = st.columns(len(indicadores))
@@ -1642,6 +1644,16 @@ def cards_indicadores(
             unsafe_allow_html=True,
         )
     st.markdown(f"**Status da rede:** {status_html}", unsafe_allow_html=True)
+
+    # Aviso quando a baseline é curta: porcentagens viram extremas
+    if tem_alt and 0 < dist_orig_m < 1000:
+        st.warning(
+            f"⚠️ **Baseline curta** ({_fmt_km(dist_orig_m)}). A variação % pode "
+            f"parecer extrema — interprete priorizando o **aumento absoluto** "
+            f"({_fmt_km(delta_m)}) e o **fator** ({fator:.2f}×). "
+            f"Origem e destino derivados muito perto da OAE focal: ideal para "
+            f"medir impacto **hyperlocal** da obra."
+        )
 
 
 # ----------------------------------------------------------------------------
@@ -2302,8 +2314,8 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     pdf.cell(72, 7, _txt(" Detalhamento das simulações"), fill=True, ln=True)
     pdf.ln(2)
 
-    headers = ["#", "Hora", "OAE focal", "Lat / Lon", "Intd.", "Modo", "Orig.(km)", "Alt.(km)", "Var.(%)"]
-    widths  = [ 8,    16,     30,            42,           10,     14,      20,           20,         18]
+    headers = ["#", "Hora", "OAE focal", "Lat / Lon", "Int", "Modo", "Orig(km)", "Alt(km)", "Var.%", "Fator"]
+    widths  = [ 7,    13,     30,            36,           7,    12,      17,          17,        17,      16]
     pdf.set_font("Helvetica", "B", 8.5)
     pdf.set_fill_color(220, 230, 240)
     for h, w in zip(headers, widths):
@@ -2314,14 +2326,21 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     for i, s in enumerate(simulacoes, 1):
         hora = s["timestamp"].strftime("%H:%M:%S") if hasattr(s["timestamp"], "strftime") else str(s["timestamp"])
         var = "-"
+        fator = "-"
         if s["tem_alt"] and s["dist_orig_m"] > 0:
             var = f"+{(s['dist_alt_m'] - s['dist_orig_m']) / s['dist_orig_m'] * 100:.1f}%"
+            fator = f"{s['dist_alt_m'] / s['dist_orig_m']:.2f}x"
         elif not s["tem_alt"]:
             var = "sem rota"
         focal = s.get("oae_focal", "-")
         flat = s.get("oae_focal_lat")
         flon = s.get("oae_focal_lon")
         latlon = f"{flat:.5f}, {flon:.5f}" if flat is not None and flon is not None else "-"
+        # Marca baseline curta com asterisco
+        baseline_curta = bool(s["tem_alt"] and 0 < s["dist_orig_m"] < 1000)
+        orig_str = f"{s['dist_orig_m']/1000:.2f}" if s["dist_orig_m"] else "-"
+        if baseline_curta:
+            orig_str = orig_str + "*"
         row = [
             str(i),
             hora,
@@ -2329,13 +2348,31 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
             latlon,
             str(len(s["interdicao"])),
             s["modo"],
-            f"{s['dist_orig_m']/1000:.2f}" if s["dist_orig_m"] else "-",
+            orig_str,
             f"{s['dist_alt_m']/1000:.2f}" if s["tem_alt"] else "-",
             var,
+            fator,
         ]
         for c, w in zip(row, widths):
             pdf.cell(w, 5.5, _txt(c), border=1, align="C")
         pdf.ln()
+
+    # Aviso para baselines curtas (linhas marcadas com *)
+    sims_curtas = [
+        s for s in simulacoes
+        if s["tem_alt"] and 0 < s["dist_orig_m"] < 1000
+    ]
+    if sims_curtas:
+        pdf.ln(1.5)
+        pdf.set_font("Helvetica", "I", 8)
+        pdf.set_text_color(120, 60, 0)  # laranja escuro
+        pdf.multi_cell(0, 3.5, _txt(
+            f"* Baseline < 1 km em {len(sims_curtas)} simulacao(oes). A Var.% pode parecer "
+            "extrema porque a rota original e muito curta — priorize o aumento absoluto e o "
+            "Fator (x) para interpretar. Comum em OAEs cuja origem/destino sintetizados ficaram "
+            "muito proximos da obra (pontes locais/curtas)."
+        ))
+        pdf.set_text_color(0, 0, 0)
     pdf.ln(4)
 
     # ----- Ranking de OAEs mais críticas -----
@@ -2747,6 +2784,13 @@ def main() -> None:
                 "Var. (%)": (
                     round((s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_orig_m"] * 100, 1)
                     if s["tem_alt"] and s["dist_orig_m"] else None
+                ),
+                "Fator (×)": (
+                    round(s["dist_alt_m"] / s["dist_orig_m"], 2)
+                    if s["tem_alt"] and s["dist_orig_m"] else None
+                ),
+                "Baseline curta?": (
+                    "⚠️ <1km" if s["tem_alt"] and 0 < s["dist_orig_m"] < 1000 else ""
                 ),
             }
             for i, s in enumerate(simulacoes)
