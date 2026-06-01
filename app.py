@@ -2857,6 +2857,196 @@ def construir_ranking_prioridade(
     return ranking
 
 
+# ============================================================================
+# Imagens para o relatório PDF (gráficos + mapas estáticos, 100% offline)
+# ============================================================================
+
+def _fig_para_png(fig, dpi: int = 150) -> "io.BytesIO":
+    """Salva uma figura Matplotlib em PNG na memória e fecha a figura."""
+    import io as _io
+    import matplotlib.pyplot as plt
+    buf = _io.BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+def _embed_imagem_pdf(pdf, buf, largura_mm: float = 180.0, gap_mm: float = 4.0) -> None:
+    """Insere um PNG (BytesIO) no PDF preservando o aspecto e avançando o cursor.
+
+    A altura é calculada a partir dos pixels reais da imagem (PIL); faz quebra
+    de página se não couber e centraliza horizontalmente.
+    """
+    import io as _io
+    from PIL import Image
+    data = buf.getvalue()
+    with Image.open(_io.BytesIO(data)) as img:
+        px_w, px_h = img.size
+    altura_mm = largura_mm * (px_h / px_w) if px_w else largura_mm * 0.6
+    if pdf.get_y() + altura_mm > pdf.h - 16:
+        pdf.add_page()
+    x = (pdf.w - largura_mm) / 2.0
+    pdf.image(_io.BytesIO(data), x=x, y=pdf.get_y(), w=largura_mm, h=altura_mm)
+    pdf.set_y(pdf.get_y() + altura_mm + gap_mm)
+
+
+def _plot_mapa_criticidade(df: pd.DataFrame, simulacoes: list[dict]):
+    """Mapa estático (offline) das OAEs colorido pelo impacto médio na rede.
+
+    Dispersão lat×lon: cor/tamanho ~ impacto médio nas simulações; OAEs sem
+    impacto registrado ficam em cinza. Funciona como 'mapa de calor' espacial.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    try:
+        ranking = construir_ranking_prioridade(df, simulacoes)
+    except Exception:
+        ranking = []
+    impacto_por_oae = {r["codigo"]: r["impacto_medio"] for r in ranking}
+
+    lons, lats, vals = [], [], []
+    for _, row in df.iterrows():
+        try:
+            lat = float(row["Latitude"]); lon = float(row["Longitude"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        lons.append(lon); lats.append(lat)
+        vals.append(impacto_por_oae.get(str(row["Código OAE"]), float("nan")))
+    if not lons:
+        return None
+
+    vals_arr = np.array(vals, dtype=float)
+    lons_arr = np.array(lons); lats_arr = np.array(lats)
+    tem = ~np.isnan(vals_arr)
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+    if (~tem).any():
+        ax.scatter(lons_arr[~tem], lats_arr[~tem], s=40, c="#C8D2E6",
+                   edgecolors="#6B7A99", linewidths=0.5,
+                   label="Sem impacto registrado", zorder=2)
+    if tem.any():
+        sizes = 60 + (vals_arr[tem] / 100.0) * 240
+        sc = ax.scatter(lons_arr[tem], lats_arr[tem], s=sizes, c=vals_arr[tem],
+                        cmap="YlOrRd", vmin=0, vmax=max(1.0, float(np.nanmax(vals_arr[tem]))),
+                        edgecolors="#0F1B33", linewidths=0.6, zorder=3)
+        cbar = fig.colorbar(sc, ax=ax, shrink=0.85)
+        cbar.set_label("Impacto médio na rede (%)")
+
+    mean_lat = float(np.mean(lats_arr))
+    try:
+        ax.set_aspect(1.0 / max(0.2, math.cos(math.radians(mean_lat))))
+    except Exception:
+        pass
+    ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
+    ax.set_title("Mapa de criticidade das OAEs (impacto médio nas simulações)")
+    ax.grid(True, alpha=0.25)
+    if (~tem).any():
+        ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def _plot_mapa_rotas(df: pd.DataFrame, s: dict):
+    """Mapa estático (offline) da rota original × alternativa de um cenário.
+
+    Recalcula as rotas a partir do O/D já gravado no resultado, usando o grafo
+    OSM em cache (não guarda coordenadas -> não pesa na memória). Só vale para
+    cenários no modo OSM com rota alternativa.
+    """
+    if s.get("modo") != "OSM" or not s.get("tem_alt"):
+        return None
+    interdicao = s.get("interdicao") or []
+    area = _area_de_interesse(df, interdicao, None, None, 2.0)
+    if area is None:
+        return None
+    centro_lat, centro_lon, raio_m = area
+    o = (s["origem_lat"], s["origem_lon"])
+    d = (s["destino_lat"], s["destino_lon"])
+    for p in (o, d):  # garante que o grafo cobre origem/destino
+        raio_m = max(raio_m, _haversine_m(centro_lat, centro_lon, p[0], p[1]) + 500.0)
+    G = grafo_osm_estavel(centro_lat, centro_lon, raio_m)
+    if G is None:
+        return None
+
+    coords_orig, _ = calcular_rota_osm(G, o, d)
+    arestas_remover: set = set()
+    for cod in interdicao:
+        try:
+            lat, lon = obter_ponto(df, cod)
+        except (KeyError, IndexError):
+            continue
+        arestas_remover |= _arestas_dentro_raio(G, lat, lon, 100.0)
+    coords_alt, _ = calcular_rota_osm(G, o, d, arestas_remover=arestas_remover)
+    if len(coords_orig) < 2 and len(coords_alt) < 2:
+        return None
+
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import LineCollection
+
+    fig, ax = plt.subplots(figsize=(8, 7))
+
+    # Malha viária ao fundo (cinza) via LineCollection (rápido p/ muitos arcos)
+    segs = []
+    for u, v, data in G.edges(data=True):
+        geom = data.get("geometry")
+        if geom is not None:
+            try:
+                xs, ys = geom.xy
+                segs.append(list(zip(xs, ys)))
+                continue
+            except Exception:
+                pass
+        try:
+            segs.append([(G.nodes[u]["x"], G.nodes[u]["y"]),
+                         (G.nodes[v]["x"], G.nodes[v]["y"])])
+        except KeyError:
+            continue
+    if segs:
+        ax.add_collection(LineCollection(segs, colors="#C8D2E6",
+                                         linewidths=0.4, alpha=0.6, zorder=1))
+
+    if len(coords_orig) >= 2:
+        ax.plot([c[1] for c in coords_orig], [c[0] for c in coords_orig],
+                color="#1976D2", linewidth=2.6, label="Rota original", zorder=3)
+    if len(coords_alt) >= 2:
+        ax.plot([c[1] for c in coords_alt], [c[0] for c in coords_alt],
+                color="#E63946", linewidth=2.6, linestyle="--",
+                label="Rota alternativa", zorder=4)
+
+    int_lons, int_lats = [], []
+    for cod in interdicao:
+        try:
+            lat, lon = obter_ponto(df, cod)
+        except (KeyError, IndexError):
+            continue
+        int_lons.append(lon); int_lats.append(lat)
+    if int_lons:
+        ax.scatter(int_lons, int_lats, marker="X", s=130, c="#D00000",
+                   edgecolors="white", linewidths=1.2, label="OAE interditada", zorder=6)
+
+    ax.scatter([o[1]], [o[0]], marker="o", s=90, c="#2A9D8F",
+               edgecolors="white", linewidths=1.2, label="Origem", zorder=6)
+    ax.scatter([d[1]], [d[0]], marker="s", s=90, c="#6A4C93",
+               edgecolors="white", linewidths=1.2, label="Destino", zorder=6)
+
+    ax.autoscale()
+    try:
+        ax.set_aspect(1.0 / max(0.2, math.cos(math.radians(centro_lat))))
+    except Exception:
+        pass
+    dist_orig = s.get("dist_orig_m", 0) / 1000.0
+    dist_alt = s.get("dist_alt_m", 0) / 1000.0
+    impacto = ((s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100.0) if s.get("dist_alt_m") else 0.0
+    foc = str(s.get("oae_focal", "-"))[:40]
+    ax.set_title(f"Rotas · {foc}\norig {dist_orig:.2f} km → alt {dist_alt:.2f} km (impacto {impacto:.0f}%)",
+                 fontsize=10)
+    ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
 def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     """Gera um relatório PDF consolidando todas as simulações da sessão."""
     from fpdf import FPDF
@@ -3093,6 +3283,61 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         ))
         pdf.set_text_color(0, 0, 0)
         pdf.ln(2)
+
+    # ----- Análises gráficas (gráficos agregados + mapas estáticos) -----
+    from collections import Counter as _Counter
+    focais = _Counter(str(s.get("oae_focal", "")) for s in simulacoes if s.get("oae_focal"))
+    focal_dom = focais.most_common(1)[0][0] if focais else ""
+
+    figs_secao: list = []  # (titulo, fig)
+    for titulo, gerar in (
+        ("Mapa de criticidade das OAEs", lambda: _plot_mapa_criticidade(df, simulacoes)),
+        ("Distribuição do impacto (%)", lambda: _plot_histograma_impacto(simulacoes)),
+        ("Curva de degradação da rede", lambda: _plot_curva_degradacao(simulacoes)),
+        ("Heatmap de co-interdição", lambda: _plot_heatmap_oaes(simulacoes, focal_dom) if focal_dom else None),
+    ):
+        try:
+            f = gerar()
+            if f is not None:
+                figs_secao.append((titulo, f))
+        except Exception:
+            pass
+
+    # Mapas de rotas: até 2 cenários de maior impacto (km), modo OSM, com alternativa
+    cands = [
+        s for s in simulacoes
+        if s.get("tem_alt") and s.get("modo") == "OSM" and s.get("dist_orig_m", 0) > 0
+    ]
+    cands.sort(key=lambda s: (s["dist_alt_m"] - s["dist_orig_m"]), reverse=True)
+    for s in cands[:2]:
+        try:
+            f = _plot_mapa_rotas(df, s)
+            if f is not None:
+                figs_secao.append((f"Rotas · {str(s.get('oae_focal', '-'))[:30]}", f))
+        except Exception:
+            pass
+
+    if figs_secao:
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_fill_color(0, 224, 212)
+        pdf.cell(70, 7, _txt(" Análises gráficas"), fill=True, ln=True)
+        pdf.ln(3)
+        for titulo, fig in figs_secao:
+            try:
+                if pdf.get_y() > pdf.h - 45:
+                    pdf.add_page()
+                pdf.set_font("Helvetica", "B", 10)
+                pdf.cell(0, 5, _txt(titulo), ln=True)
+                pdf.ln(1)
+                _embed_imagem_pdf(pdf, _fig_para_png(fig))
+            except Exception:
+                try:
+                    import matplotlib.pyplot as plt
+                    plt.close(fig)
+                except Exception:
+                    pass
+        pdf.add_page()
 
     # ----- Metodologia -----
     pdf.set_font("Helvetica", "B", 11)
