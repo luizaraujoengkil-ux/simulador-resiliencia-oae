@@ -2238,7 +2238,20 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
 # MLP de priorização de manutenção (combina condição estrutural + impacto na rede)
 # ============================================================================
 
-@st.cache_resource(show_spinner="Treinando MLP de priorização...")
+def _heuristica_prioridade(nota: float, impacto_pct: float) -> float:
+    """Função heurística analítica (fallback quando o MLP/sklearn não está disponível).
+
+    Mesma fórmula usada para gerar os dados sintéticos de treino do MLP, então
+    os resultados são quase idênticos. Garante que o app não quebre mesmo se
+    o scikit-learn falhar ao instalar no Streamlit Cloud.
+    """
+    score_struct = (6.0 - max(1.0, min(5.0, nota))) / 5.0
+    score_impacto = max(0.0, min(100.0, impacto_pct)) / 100.0
+    combinado = 0.6 * score_struct + 0.4 * score_impacto
+    return 100.0 / (1.0 + math.exp(-5.0 * (combinado - 0.5)))
+
+
+@st.cache_resource(show_spinner=False)
 def _modelo_prioridade_mlp():
     """Treina um MLPRegressor para escore de prioridade de manutenção (0-100).
 
@@ -2248,52 +2261,68 @@ def _modelo_prioridade_mlp():
     Dados de treino: SINTÉTICOS, baseados em princípios de engenharia:
       - Condição estrutural pesa 60% (Nota baixa = manutenção urgente)
       - Impacto na malha pesa 40% (alto impacto = ponte é "gargalo crítico")
-      - Função alvo combina lineamente com não-linearidade sigmoide para
-        produzir curvas suaves nas zonas extremas (evita escores 0% ou 100% planos)
+      - Função alvo combina linearmente com não-linearidade sigmoide
 
-    Em produção, o MLP seria re-treinado com decisões reais de engenheiros de
-    pontes (dados rotulados de prioridade histórica de manutenção).
+    Retorna None se sklearn não está disponível (cai para heurística).
+    Em produção, re-treinar com decisões reais de engenheiros de pontes.
     """
-    from sklearn.neural_network import MLPRegressor
-    import numpy as np
+    try:
+        from sklearn.neural_network import MLPRegressor
+        import numpy as np
+    except Exception:
+        return None
 
-    rng = np.random.default_rng(42)
-    n = 5000
-    notas = rng.uniform(1, 5, n)
-    impactos = rng.uniform(0, 100, n)
+    try:
+        rng = np.random.default_rng(42)
+        n = 5000
+        notas = rng.uniform(1, 5, n)
+        impactos = rng.uniform(0, 100, n)
 
-    # Ground truth: combinação ponderada com sigmoide suave
-    score_struct = (6 - notas) / 5      # 0-1, maior = pior condição
-    score_impacto = impactos / 100      # 0-1, maior = mais impacto
-    combinado = 0.6 * score_struct + 0.4 * score_impacto  # 0-1
-    # Sigmoide centrada em 0.5 com inclinação 5 → suaviza extremos
-    prioridade = 100.0 / (1.0 + np.exp(-5 * (combinado - 0.5)))
-    # Pequeno ruído para o MLP não memorizar exatamente
-    prioridade = np.clip(prioridade + rng.normal(0, 2, n), 0, 100)
+        score_struct = (6 - notas) / 5
+        score_impacto = impactos / 100
+        combinado = 0.6 * score_struct + 0.4 * score_impacto
+        prioridade = 100.0 / (1.0 + np.exp(-5 * (combinado - 0.5)))
+        prioridade = np.clip(prioridade + rng.normal(0, 2, n), 0, 100)
 
-    X = np.column_stack([notas, impactos])
-    y = prioridade
+        X = np.column_stack([notas, impactos])
+        y = prioridade
 
-    mlp = MLPRegressor(
-        hidden_layer_sizes=(16, 8),
-        activation="relu",
-        max_iter=500,
-        random_state=42,
-        early_stopping=True,
-        validation_fraction=0.1,
-        tol=1e-4,
-    )
-    mlp.fit(X, y)
-    return mlp
+        mlp = MLPRegressor(
+            hidden_layer_sizes=(16, 8),
+            activation="relu",
+            max_iter=500,
+            random_state=42,
+            early_stopping=True,
+            validation_fraction=0.1,
+            tol=1e-4,
+        )
+        mlp.fit(X, y)
+        return mlp
+    except Exception:
+        return None
 
 
 def _calcular_prioridade(nota: float, impacto_pct: float) -> float:
-    """Retorna prioridade 0-100 para uma OAE usando o MLP treinado."""
-    import numpy as np
+    """Retorna prioridade 0-100 para uma OAE.
+
+    Tenta usar o MLP treinado; se indisponível (sklearn falhou ou erro),
+    cai para a função heurística analítica (resultado equivalente).
+    """
     mlp = _modelo_prioridade_mlp()
-    X = np.array([[nota, impacto_pct]])
-    p = float(mlp.predict(X)[0])
-    return max(0.0, min(100.0, p))
+    if mlp is None:
+        return _heuristica_prioridade(nota, impacto_pct)
+    try:
+        import numpy as np
+        X = np.array([[nota, impacto_pct]])
+        p = float(mlp.predict(X)[0])
+        return max(0.0, min(100.0, p))
+    except Exception:
+        return _heuristica_prioridade(nota, impacto_pct)
+
+
+def _engine_prioridade() -> str:
+    """Indica qual engine está ativa: 'MLP' ou 'Heurística'."""
+    return "MLP" if _modelo_prioridade_mlp() is not None else "Heurística"
 
 
 def _classifica_prioridade(score: float) -> str:
@@ -2510,19 +2539,29 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     ranking_mlp = construir_ranking_prioridade(df, simulacoes)
 
     if ranking_mlp:
+        engine = _engine_prioridade()
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_fill_color(0, 224, 212)
-        pdf.cell(98, 7, _txt(" Priorizacao para Manutencao (MLP)"), fill=True, ln=True)
+        pdf.cell(100, 7, _txt(f" Priorizacao para Manutencao ({engine})"), fill=True, ln=True)
         pdf.ln(1)
         pdf.set_font("Helvetica", "I", 8.5)
-        pdf.multi_cell(0, 4.2, _txt(
-            "Escore 0-100 produzido por um Multi-Layer Perceptron (sklearn, topologia "
-            "[2 -> 16 -> 8 -> 1]) treinado com dados sinteticos baseados em principios "
-            "de engenharia: combina condicao estrutural (Nota Geral, peso 60%) e "
-            "impacto na rede (Impacto medio nas simulacoes, peso 40%). Quanto maior "
-            "o escore, mais urgente a manutencao. Classificacao: ALTA (>=70), MEDIA "
-            "(40-69), BAIXA (<40)."
-        ))
+        if engine == "MLP":
+            pdf.multi_cell(0, 4.2, _txt(
+                "Escore 0-100 produzido por um Multi-Layer Perceptron (sklearn, topologia "
+                "[2 -> 16 -> 8 -> 1]) treinado com dados sinteticos baseados em principios "
+                "de engenharia: combina condicao estrutural (Nota Geral, peso 60%) e "
+                "impacto na rede (Impacto medio nas simulacoes, peso 40%). Quanto maior "
+                "o escore, mais urgente a manutencao. Classificacao: ALTA (>=70), MEDIA "
+                "(40-69), BAIXA (<40)."
+            ))
+        else:
+            pdf.multi_cell(0, 4.2, _txt(
+                "Escore 0-100 calculado pela funcao heuristica analitica equivalente ao "
+                "MLP (mesma formula 60/40 com sigmoide). scikit-learn indisponivel no "
+                "ambiente; resultados praticamente identicos. Combina Nota Geral (peso "
+                "60%) e Impacto medio nas simulacoes (peso 40%). Classificacao: ALTA "
+                "(>=70), MEDIA (40-69), BAIXA (<40)."
+            ))
         pdf.ln(1.5)
 
         rank_headers = ["Pos", "Codigo OAE", "Nota", "Impacto med.", "Aparicoes", "Prioridade", "Classe"]
@@ -2957,15 +2996,22 @@ def main() -> None:
         # ----- Priorização MLP de Manutenção -----
         ranking_mlp = construir_ranking_prioridade(df, simulacoes)
         if ranking_mlp:
+            engine = _engine_prioridade()
             st.markdown("")
-            st.markdown("### 🛠️ Priorização de Manutenção (MLP)")
-            st.caption(
-                "Escore 0-100 produzido por um **Multi-Layer Perceptron** "
-                "(`[2 → 16 → 8 → 1]`, scikit-learn) que combina **Nota Geral** "
-                "(condição estrutural, peso 60%) e **Impacto médio na rede** "
-                "(peso 40%). Quanto maior, mais urgente a manutenção. "
-                "Classes: 🔴 ALTA (≥70) · 🟡 MÉDIA (40-69) · 🟢 BAIXA (<40)."
-            )
+            st.markdown(f"### 🛠️ Priorização de Manutenção ({engine})")
+            if engine == "MLP":
+                st.caption(
+                    "Escore 0-100 produzido por um **Multi-Layer Perceptron** "
+                    "(`[2 → 16 → 8 → 1]`, scikit-learn) que combina **Nota Geral** "
+                    "(condição estrutural, peso 60%) e **Impacto médio na rede** "
+                    "(peso 40%). Quanto maior, mais urgente a manutenção. "
+                    "Classes: 🔴 ALTA (≥70) · 🟡 MÉDIA (40-69) · 🟢 BAIXA (<40)."
+                )
+            else:
+                st.caption(
+                    "⚠️ scikit-learn indisponível — usando **heurística analítica equivalente** "
+                    "(mesma fórmula 60/40 + sigmoide). Resultados praticamente idênticos ao MLP."
+                )
 
             # Top 3 em destaque
             top3 = ranking_mlp[:3]
