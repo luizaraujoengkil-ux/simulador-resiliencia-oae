@@ -1840,6 +1840,14 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
         # Inicializa com a 1ª OAE pré-selecionada na 1ª vez que o app é aberto.
         if "interdicao_select" not in st.session_state:
             st.session_state["interdicao_select"] = piores[:1]
+        else:
+            # Sanity check: remove códigos órfãos (ex.: KMZ renomeado, base
+            # nova com nomes diferentes). Streamlit não filtra sozinho e o
+            # selectbox/multiselect quebra com valores fora das opções.
+            atual = st.session_state["interdicao_select"]
+            validos = [c for c in atual if c in opcoes]
+            if validos != atual:
+                st.session_state["interdicao_select"] = validos or piores[:1]
 
         interdicao = st.sidebar.multiselect(
             "OAEs interditadas (uma ou várias)",
@@ -1883,6 +1891,12 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             origem = None
             destino = None
         else:
+            # Limpa valor stale do session_state se não estiver mais nas opções
+            if (
+                "oae_focal_sel" in st.session_state
+                and st.session_state["oae_focal_sel"] not in interdicao
+            ):
+                st.session_state["oae_focal_sel"] = interdicao[0]
             origem = st.sidebar.selectbox(
                 "OAE focal da análise",
                 interdicao,
