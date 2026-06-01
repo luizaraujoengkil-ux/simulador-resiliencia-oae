@@ -2716,6 +2716,10 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
         "tem_alt": bool(tem_alt),
         "modo": modo_usado,
         "raio_km": (raio_usado_m / 1000.0) if raio_usado_m else None,
+        # Geometria REAL das rotas — para o mapa do PDF refletir exatamente o que
+        # o simulador mostrou (sem recalcular com parâmetros diferentes).
+        "coords_orig": [(float(la), float(lo)) for la, lo in coords_orig] if tem_orig else [],
+        "coords_alt": [(float(la), float(lo)) for la, lo in coords_alt] if tem_alt else [],
     }
 
 
@@ -3039,52 +3043,38 @@ def _desenhar_basemap(ax, lon_min, lat_min, lon_max, lat_max) -> bool:
 def _plot_mapa_rotas(df: pd.DataFrame, s: dict):
     """Mapa da rota original × alternativa de um cenário, com fundo de rua real.
 
-    Recalcula as rotas a partir do O/D já gravado no resultado, usando o grafo
-    OSM em cache (não guarda coordenadas -> não pesa na memória). Só vale para
-    cenários no modo OSM com rota alternativa.
+    Desenha as COORDENADAS REAIS gravadas pela simulação (coords_orig/coords_alt),
+    então o mapa do PDF reflete exatamente o que o simulador mostrou. Se o cenário
+    não tiver geometria salva (ex.: rodado no batch), retorna None em vez de
+    recalcular com outros parâmetros — recálculo gerava rotas inconsistentes.
+    Cores alinhadas ao app: original = vermelho tracejado, alternativa = verde.
     """
-    if s.get("modo") != "OSM" or not s.get("tem_alt"):
-        return None
-    interdicao = s.get("interdicao") or []
-    area = _area_de_interesse(df, interdicao, None, None, 2.0)
-    if area is None:
-        return None
-    centro_lat, centro_lon, raio_m = area
-    o = (s["origem_lat"], s["origem_lon"])
-    d = (s["destino_lat"], s["destino_lon"])
-    for p in (o, d):  # garante que o grafo cobre origem/destino
-        raio_m = max(raio_m, _haversine_m(centro_lat, centro_lon, p[0], p[1]) + 500.0)
-    G = grafo_osm_estavel(centro_lat, centro_lon, raio_m)
-    if G is None:
-        return None
-
-    coords_orig, _ = calcular_rota_osm(G, o, d)
-    arestas_remover: set = set()
-    for cod in interdicao:
-        try:
-            lat, lon = obter_ponto(df, cod)
-        except (KeyError, IndexError):
-            continue
-        arestas_remover |= _arestas_dentro_raio(G, lat, lon, 100.0)
-    coords_alt, _ = calcular_rota_osm(G, o, d, arestas_remover=arestas_remover)
+    coords_orig = s.get("coords_orig") or []
+    coords_alt = s.get("coords_alt") or []
     if len(coords_orig) < 2 and len(coords_alt) < 2:
         return None
 
     import matplotlib.pyplot as plt
-    from matplotlib.collections import LineCollection
 
     M = _lonlat_to_merc
+    o = (s.get("origem_lat"), s.get("origem_lon"))
+    d = (s.get("destino_lat"), s.get("destino_lon"))
 
-    # bbox (lon/lat) das rotas + O/D + interditadas, com margem
-    pts = [(c[1], c[0]) for c in coords_orig] + [(c[1], c[0]) for c in coords_alt]
-    pts += [(o[1], o[0]), (d[1], d[0])]
-    int_pts = []
-    for cod in interdicao:
+    int_pts = []  # coordenadas das OAEs interditadas (marcadores X)
+    for cod in (s.get("interdicao") or []):
         try:
             lat, lon = obter_ponto(df, cod)
         except (KeyError, IndexError):
             continue
-        int_pts.append((lon, lat)); pts.append((lon, lat))
+        int_pts.append((lon, lat))
+
+    # bbox (lon/lat) das rotas + O/D + interditadas, com margem
+    pts = [(c[1], c[0]) for c in coords_orig] + [(c[1], c[0]) for c in coords_alt]
+    if o[0] is not None:
+        pts.append((o[1], o[0]))
+    if d[0] is not None:
+        pts.append((d[1], d[0]))
+    pts += int_pts
     lons = [p[0] for p in pts]; lats = [p[1] for p in pts]
     mlon = (max(lons) - min(lons)) * 0.12 + 0.002
     mlat = (max(lats) - min(lats)) * 0.12 + 0.002
@@ -3094,46 +3084,30 @@ def _plot_mapa_rotas(df: pd.DataFrame, s: dict):
     fig, ax = plt.subplots(figsize=(8, 7))
     usou_basemap = _desenhar_basemap(ax, lon_min, lat_min, lon_max, lat_max)
 
-    if not usou_basemap:
-        # fallback offline: malha viária em cinza (Web Mercator)
-        segs = []
-        for u, v, data in G.edges(data=True):
-            geom = data.get("geometry")
-            if geom is not None:
-                try:
-                    xs, ys = geom.xy
-                    segs.append([M(x, y) for x, y in zip(xs, ys)]); continue
-                except Exception:
-                    pass
-            try:
-                segs.append([M(G.nodes[u]["x"], G.nodes[u]["y"]),
-                             M(G.nodes[v]["x"], G.nodes[v]["y"])])
-            except KeyError:
-                continue
-        if segs:
-            ax.add_collection(LineCollection(segs, colors="#9AA7BD",
-                                             linewidths=0.4, alpha=0.6, zorder=1))
-
     if len(coords_orig) >= 2:
         xy = [M(c[1], c[0]) for c in coords_orig]
-        ax.plot([p[0] for p in xy], [p[1] for p in xy], color="#1565C0",
-                linewidth=3.0, solid_capstyle="round", label="Rota original", zorder=3)
-    if len(coords_alt) >= 2:
-        xy = [M(c[1], c[0]) for c in coords_alt]
         ax.plot([p[0] for p in xy], [p[1] for p in xy], color="#E63946",
                 linewidth=3.0, linestyle="--", solid_capstyle="round",
-                label="Rota alternativa", zorder=4)
+                label="Rota original (afetada)", zorder=3)
+    if len(coords_alt) >= 2:
+        xy = [M(c[1], c[0]) for c in coords_alt]
+        ax.plot([p[0] for p in xy], [p[1] for p in xy], color="#22C55E",
+                linewidth=3.4, solid_capstyle="round",
+                label="Rota alternativa (proposta)", zorder=4)
 
     if int_pts:
         ixy = [M(lon, lat) for lon, lat in int_pts]
         ax.scatter([p[0] for p in ixy], [p[1] for p in ixy], marker="X", s=150,
                    c="#D00000", edgecolors="white", linewidths=1.4,
                    label="OAE interditada", zorder=6)
-    ox_, oy_ = M(o[1], o[0]); dx_, dy_ = M(d[1], d[0])
-    ax.scatter([ox_], [oy_], marker="o", s=100, c="#2A9D8F", edgecolors="white",
-               linewidths=1.4, label="Origem", zorder=6)
-    ax.scatter([dx_], [dy_], marker="s", s=100, c="#6A4C93", edgecolors="white",
-               linewidths=1.4, label="Destino", zorder=6)
+    if o[0] is not None:
+        ox_, oy_ = M(o[1], o[0])
+        ax.scatter([ox_], [oy_], marker="o", s=100, c="#2A9D8F", edgecolors="white",
+                   linewidths=1.4, label="Origem", zorder=6)
+    if d[0] is not None:
+        dx_, dy_ = M(d[1], d[0])
+        ax.scatter([dx_], [dy_], marker="s", s=100, c="#6A4C93", edgecolors="white",
+                   linewidths=1.4, label="Destino", zorder=6)
 
     x0, y0 = M(lon_min, lat_min); x1, y1 = M(lon_max, lat_max)
     ax.set_xlim(x0, x1); ax.set_ylim(y0, y1)
@@ -3410,10 +3384,12 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         except Exception:
             pass
 
-    # Mapas de rotas: até 2 cenários de maior impacto (km), modo OSM, com alternativa
+    # Mapas de rotas: até 2 cenários de maior impacto COM geometria salva
+    # (apenas simulações individuais guardam as coordenadas reais das rotas).
     cands = [
         s for s in simulacoes
-        if s.get("tem_alt") and s.get("modo") == "OSM" and s.get("dist_orig_m", 0) > 0
+        if s.get("tem_alt") and (s.get("coords_orig") or s.get("coords_alt"))
+        and s.get("dist_orig_m", 0) > 0
     ]
     cands.sort(key=lambda s: (s["dist_alt_m"] - s["dist_orig_m"]), reverse=True)
     for s in cands[:2]:
