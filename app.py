@@ -2510,8 +2510,12 @@ def main() -> None:
     # Roda após cada carga: aplica cache do session_state e, se houver OAEs
     # ainda sem Município/Rodovia, consulta o Nominatim/OSM (1 req/s).
     # Cada (lat, lon) é tentada apenas 1 vez por sessão.
+    # IMPORTANTE: NÃO salvamos o df enriquecido em st.session_state["df"]!
+    # Se salvasse, o df no session_state ficaria diferente do que o loader
+    # produz (que vem sem enriquecimento), e a checagem df_novo.equals(df_atual)
+    # acima dispararia rerun infinito. O cache do enriquecimento vive em
+    # st.session_state["enrichment_cache"] e é reaplicado a cada render.
     df = enriquecer_geocodificacao_auto(df)
-    st.session_state["df"] = df
 
     # Mapa geral — alvo do card "2. Visualizar mapa"
     interdicao_atual = opcoes.get("interdicao") or []
