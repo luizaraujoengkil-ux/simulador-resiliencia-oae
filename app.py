@@ -2234,6 +2234,116 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
     }
 
 
+# ============================================================================
+# MLP de priorização de manutenção (combina condição estrutural + impacto na rede)
+# ============================================================================
+
+@st.cache_resource(show_spinner="Treinando MLP de priorização...")
+def _modelo_prioridade_mlp():
+    """Treina um MLPRegressor para escore de prioridade de manutenção (0-100).
+
+    Entradas: [Nota Geral (1-5), Impacto médio % (0-100)]
+    Saída:    Prioridade (0-100), maior = mais urgente reparar
+
+    Dados de treino: SINTÉTICOS, baseados em princípios de engenharia:
+      - Condição estrutural pesa 60% (Nota baixa = manutenção urgente)
+      - Impacto na malha pesa 40% (alto impacto = ponte é "gargalo crítico")
+      - Função alvo combina lineamente com não-linearidade sigmoide para
+        produzir curvas suaves nas zonas extremas (evita escores 0% ou 100% planos)
+
+    Em produção, o MLP seria re-treinado com decisões reais de engenheiros de
+    pontes (dados rotulados de prioridade histórica de manutenção).
+    """
+    from sklearn.neural_network import MLPRegressor
+    import numpy as np
+
+    rng = np.random.default_rng(42)
+    n = 5000
+    notas = rng.uniform(1, 5, n)
+    impactos = rng.uniform(0, 100, n)
+
+    # Ground truth: combinação ponderada com sigmoide suave
+    score_struct = (6 - notas) / 5      # 0-1, maior = pior condição
+    score_impacto = impactos / 100      # 0-1, maior = mais impacto
+    combinado = 0.6 * score_struct + 0.4 * score_impacto  # 0-1
+    # Sigmoide centrada em 0.5 com inclinação 5 → suaviza extremos
+    prioridade = 100.0 / (1.0 + np.exp(-5 * (combinado - 0.5)))
+    # Pequeno ruído para o MLP não memorizar exatamente
+    prioridade = np.clip(prioridade + rng.normal(0, 2, n), 0, 100)
+
+    X = np.column_stack([notas, impactos])
+    y = prioridade
+
+    mlp = MLPRegressor(
+        hidden_layer_sizes=(16, 8),
+        activation="relu",
+        max_iter=500,
+        random_state=42,
+        early_stopping=True,
+        validation_fraction=0.1,
+        tol=1e-4,
+    )
+    mlp.fit(X, y)
+    return mlp
+
+
+def _calcular_prioridade(nota: float, impacto_pct: float) -> float:
+    """Retorna prioridade 0-100 para uma OAE usando o MLP treinado."""
+    import numpy as np
+    mlp = _modelo_prioridade_mlp()
+    X = np.array([[nota, impacto_pct]])
+    p = float(mlp.predict(X)[0])
+    return max(0.0, min(100.0, p))
+
+
+def _classifica_prioridade(score: float) -> str:
+    if score >= 70:
+        return "ALTA"
+    if score >= 40:
+        return "MEDIA"
+    return "BAIXA"
+
+
+def construir_ranking_prioridade(
+    df: pd.DataFrame, simulacoes: list[dict]
+) -> list[dict]:
+    """Para cada OAE que apareceu nas simulações, calcula prioridade MLP.
+
+    Retorna lista ordenada por prioridade descendente:
+      [{codigo, nota, impacto_medio, aparicoes, prioridade, classe}, ...]
+    """
+    impactos: dict[str, list[float]] = {}
+    for s in simulacoes:
+        if not s["tem_alt"] or s["dist_orig_m"] <= 0 or s["dist_alt_m"] <= 0:
+            continue
+        imp_pct = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100.0
+        for oae in s["interdicao"]:
+            impactos.setdefault(oae, []).append(imp_pct)
+
+    ranking = []
+    for cod, vals in impactos.items():
+        sel = df[df["Código OAE"].astype(str) == str(cod)]
+        if sel.empty:
+            continue
+        try:
+            nota = float(sel.iloc[0]["Nota Geral"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        impacto_medio = sum(vals) / len(vals)
+        prioridade = _calcular_prioridade(nota, impacto_medio)
+        ranking.append({
+            "codigo": cod,
+            "nota": nota,
+            "impacto_medio": impacto_medio,
+            "aparicoes": len(vals),
+            "prioridade": prioridade,
+            "classe": _classifica_prioridade(prioridade),
+        })
+
+    ranking.sort(key=lambda x: -x["prioridade"])
+    return ranking
+
+
 def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
     """Gera um relatório PDF consolidando todas as simulações da sessão."""
     from fpdf import FPDF
@@ -2396,51 +2506,70 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         pdf.set_text_color(0, 0, 0)
     pdf.ln(4)
 
-    # ----- Ranking de OAEs mais críticas -----
-    # Métrica: Impacto % = (alt - orig) / alt * 100 (bounded 0-100%)
-    impactos: dict[str, list[float]] = {}
-    for s in simulacoes:
-        if not s["tem_alt"] or s["dist_orig_m"] <= 0 or s["dist_alt_m"] <= 0:
-            continue
-        impacto_pct = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100.0
-        for oae in s["interdicao"]:
-            impactos.setdefault(oae, []).append(impacto_pct)
+    # ----- Priorização para Manutenção (MLP) -----
+    ranking_mlp = construir_ranking_prioridade(df, simulacoes)
 
-    if impactos:
+    if ranking_mlp:
         pdf.set_font("Helvetica", "B", 13)
         pdf.set_fill_color(0, 224, 212)
-        pdf.cell(82, 7, _txt(" Ranking de OAEs mais críticas"), fill=True, ln=True)
+        pdf.cell(98, 7, _txt(" Priorizacao para Manutencao (MLP)"), fill=True, ln=True)
         pdf.ln(1)
-        pdf.set_font("Helvetica", "I", 9)
-        pdf.multi_cell(0, 4.5, _txt(
-            "Calculado como o Impacto medio nos cenarios em que cada OAE foi "
-            "interditada. Impacto = (rota alternativa - rota original) / rota "
-            "alternativa x 100, naturalmente bounded entre 0% e 100%. Quanto maior, "
-            "mais critica e a OAE para a resiliencia da rede."
+        pdf.set_font("Helvetica", "I", 8.5)
+        pdf.multi_cell(0, 4.2, _txt(
+            "Escore 0-100 produzido por um Multi-Layer Perceptron (sklearn, topologia "
+            "[2 -> 16 -> 8 -> 1]) treinado com dados sinteticos baseados em principios "
+            "de engenharia: combina condicao estrutural (Nota Geral, peso 60%) e "
+            "impacto na rede (Impacto medio nas simulacoes, peso 40%). Quanto maior "
+            "o escore, mais urgente a manutencao. Classificacao: ALTA (>=70), MEDIA "
+            "(40-69), BAIXA (<40)."
         ))
         pdf.ln(1.5)
 
-        ranked = sorted(impactos.items(), key=lambda x: -sum(x[1]) / len(x[1]))
-        rank_headers = ["Posição", "Código OAE", "Aparições", "Impacto médio (%)", "Impacto máx (%)"]
-        rank_widths  = [16,         60,           18,           30,                  26]
+        rank_headers = ["Pos", "Codigo OAE", "Nota", "Impacto med.", "Aparicoes", "Prioridade", "Classe"]
+        rank_widths  = [10,    52,           14,     24,             18,           24,            18]
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(220, 230, 240)
         for h, w in zip(rank_headers, rank_widths):
             pdf.cell(w, 6, _txt(h), border=1, align="C", fill=True)
         pdf.ln()
         pdf.set_font("Helvetica", "", 9)
-        for pos, (oae, vars_) in enumerate(ranked[:10], 1):
+
+        # Cores para classe ALTA/MEDIA/BAIXA
+        cores_classe = {
+            "ALTA":  (255, 220, 220),  # vermelho claro
+            "MEDIA": (255, 240, 200),  # amarelo claro
+            "BAIXA": (220, 240, 220),  # verde claro
+        }
+
+        for pos, item in enumerate(ranking_mlp[:10], 1):
+            cor_fill = cores_classe.get(item["classe"], (255, 255, 255))
             row = [
                 f"{pos}",
-                oae,
-                str(len(vars_)),
-                f"{sum(vars_)/len(vars_):.1f}%",
-                f"{max(vars_):.1f}%",
+                item["codigo"],
+                f"{item['nota']:.0f}",
+                f"{item['impacto_medio']:.1f}%",
+                str(item["aparicoes"]),
+                f"{item['prioridade']:.1f}",
+                item["classe"],
             ]
-            for c, w in zip(row, rank_widths):
-                pdf.cell(w, 5.5, _txt(c), border=1, align="C")
+            # Pinta a célula 'Classe' com a cor correspondente
+            for i, (c, w) in enumerate(zip(row, rank_widths)):
+                if i == len(row) - 1:  # última coluna (Classe)
+                    pdf.set_fill_color(*cor_fill)
+                    pdf.cell(w, 5.5, _txt(c), border=1, align="C", fill=True)
+                else:
+                    pdf.cell(w, 5.5, _txt(c), border=1, align="C")
             pdf.ln()
-        pdf.ln(4)
+        pdf.ln(2)
+        pdf.set_font("Helvetica", "I", 7.5)
+        pdf.set_text_color(80, 80, 80)
+        pdf.multi_cell(0, 3.2, _txt(
+            "Nota: o MLP foi treinado com dados sinteticos. Em producao, recomenda-se "
+            "re-treinar com decisoes historicas de manutencao tomadas por engenheiros "
+            "de pontes (rotulos reais de prioridade)."
+        ))
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(2)
 
     # ----- Metodologia -----
     pdf.set_font("Helvetica", "B", 11)
@@ -2824,6 +2953,61 @@ def main() -> None:
             for i, s in enumerate(simulacoes)
         ])
         st.dataframe(hist, use_container_width=True, hide_index=True, height=min(320, 50 + len(hist) * 36))
+
+        # ----- Priorização MLP de Manutenção -----
+        ranking_mlp = construir_ranking_prioridade(df, simulacoes)
+        if ranking_mlp:
+            st.markdown("")
+            st.markdown("### 🛠️ Priorização de Manutenção (MLP)")
+            st.caption(
+                "Escore 0-100 produzido por um **Multi-Layer Perceptron** "
+                "(`[2 → 16 → 8 → 1]`, scikit-learn) que combina **Nota Geral** "
+                "(condição estrutural, peso 60%) e **Impacto médio na rede** "
+                "(peso 40%). Quanto maior, mais urgente a manutenção. "
+                "Classes: 🔴 ALTA (≥70) · 🟡 MÉDIA (40-69) · 🟢 BAIXA (<40)."
+            )
+
+            # Top 3 em destaque
+            top3 = ranking_mlp[:3]
+            cols_top = st.columns(len(top3))
+            for col, item in zip(cols_top, top3):
+                emoji_classe = {"ALTA": "🔴", "MEDIA": "🟡", "BAIXA": "🟢"}[item["classe"]]
+                col.markdown(
+                    f"""
+                    <div class="metric-card">
+                        <div class="label">{emoji_classe} {item['classe']}</div>
+                        <div class="value" style="font-size:1.05rem; line-height:1.2;">{item['codigo']}</div>
+                        <div style="font-size:0.82rem; color:#A8B5CC; margin-top:0.3rem;">
+                            Nota <b>{item['nota']:.0f}</b> · Impacto <b>{item['impacto_medio']:.1f}%</b><br>
+                            Prioridade: <b style="color:#00E0D4;">{item['prioridade']:.1f}/100</b>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            # Tabela completa
+            st.markdown("")
+            df_rank = pd.DataFrame([
+                {
+                    "Pos.": i + 1,
+                    "Código OAE": item["codigo"],
+                    "Nota": item["nota"],
+                    "Impacto médio (%)": round(item["impacto_medio"], 1),
+                    "Aparições": item["aparicoes"],
+                    "Prioridade (0-100)": round(item["prioridade"], 1),
+                    "Classe": item["classe"],
+                }
+                for i, item in enumerate(ranking_mlp)
+            ])
+            st.dataframe(df_rank, use_container_width=True, hide_index=True)
+
+            st.caption(
+                "⚙️ **Defesa metodológica:** o MLP foi treinado com **dados sintéticos** "
+                "baseados em princípios de engenharia (peso 60/40). Em produção, "
+                "re-treinar com decisões reais de engenheiros de pontes (rótulos "
+                "históricos de prioridade) substituindo os dados sintéticos."
+            )
 
         col_dl, col_clear = st.columns([3, 1])
         try:

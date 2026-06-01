@@ -10,3 +10,4 @@ osmnx>=1.9
 geopandas>=0.14
 fpdf2>=2.7
 geopy>=2.4
+scikit-learn>=1.3
