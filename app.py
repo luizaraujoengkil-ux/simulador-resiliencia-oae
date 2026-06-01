@@ -1947,6 +1947,20 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
             type="primary",
         )
 
+        # ---- Botão: Simulação Geral (Monte Carlo / batch) ----
+        sim_geral = st.sidebar.button(
+            "🎲 Simulação Geral",
+            use_container_width=True,
+            help="Roda N simulações automaticamente variando quais OUTRAS OAEs estão "
+                 "interditadas junto da focal. Gera histograma, heatmap e curva de "
+                 "degradação para análise sistêmica.",
+            disabled=(origem is None),
+            key="btn_sim_geral",
+        )
+        if sim_geral and origem:
+            # Abre o dialog de configuração (a OAE focal é a que está selecionada acima)
+            dialog_batch_config(df, origem)
+
         # Placeholder do contador — pode ser atualizado depois da simulação
         # via _atualizar_contador_sidebar() sem precisar de st.rerun().
         counter_slot = st.sidebar.empty()
@@ -1982,6 +1996,415 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
 def obter_ponto(df: pd.DataFrame, codigo: str) -> tuple[float, float]:
     linha = df[df["Código OAE"].astype(str) == str(codigo)].iloc[0]
     return float(linha["Latitude"]), float(linha["Longitude"])
+
+
+# ============================================================================
+# Simulação SILENCIOSA — núcleo de cálculo reutilizável (UI e batch)
+# ============================================================================
+
+def _simular_cenario_silencioso(
+    df: pd.DataFrame,
+    focal: str,
+    interdicao: list[str],
+    buffer_km: float = 2.0,
+    modo_forcado_simples: bool = False,
+) -> tuple[dict | None, str]:
+    """Roda 1 simulação SEM renderizar nada. Retorna (resultado_dict, status_msg).
+
+    Usado tanto pelo `executar_simulacao` (UI) quanto pelo `executar_batch`
+    (Monte Carlo). A `focal` é SEMPRE incluída no conjunto de interdições.
+
+    status_msg: "ok" | "focal_invalida" | "od_invalido" | "sem_rotas" | "erro"
+    """
+    if not focal:
+        return None, "focal_invalida"
+    interdicao = list(interdicao)
+    if focal not in interdicao:
+        interdicao.append(focal)
+
+    try:
+        oae_lat, oae_lon = obter_ponto(df, focal)
+    except (KeyError, IndexError):
+        return None, "focal_invalida"
+
+    G_osm = None
+    raio_usado_m: float | None = None
+    coords_orig: list = []
+    coords_alt: list = []
+    dist_orig = dist_alt = 0.0
+    modo_usado = "simplificado"
+    o_lat = d_lat = oae_lat
+    o_lon = d_lon = oae_lon
+
+    try:
+        if not modo_forcado_simples:
+            area = _area_de_interesse(df, interdicao, None, None, buffer_km)
+            if area is not None:
+                centro_lat, centro_lon, raio_m = area
+                raio_usado_m = raio_m
+                G_osm = construir_grafo_osm(centro_lat, centro_lon, raio_m)
+
+        if G_osm is not None:
+            od = _auto_od_da_oae(G_osm, oae_lat, oae_lon, raio_min_m=200, raio_max_m=5000)
+            if od[0] is None:
+                return None, "od_invalido"
+            (o_lat, o_lon), (d_lat, d_lon), _ = od
+
+            arestas_remover: set = set()
+            for cod in interdicao:
+                try:
+                    lat, lon = obter_ponto(df, cod)
+                except (KeyError, IndexError):
+                    continue
+                arestas_remover |= _arestas_dentro_raio(G_osm, lat, lon, 100.0)
+
+            coords_orig, dist_orig = calcular_rota_osm(G_osm, (o_lat, o_lon), (d_lat, d_lon))
+            coords_alt, dist_alt = calcular_rota_osm(
+                G_osm, (o_lat, o_lon), (d_lat, d_lon),
+                arestas_remover=arestas_remover,
+            )
+            modo_usado = "OSM"
+        else:
+            G_simp = construir_grafo_simplificado(df, k_vizinhos=3)
+            vizinhos = list(G_simp.neighbors(focal)) if focal in G_simp else []
+            if len(vizinhos) >= 2:
+                o_cod, d_cod = vizinhos[0], vizinhos[1]
+            else:
+                todos = df["Código OAE"].astype(str).tolist()
+                o_cod = next((c for c in todos if c != focal), focal)
+                d_cod = next((c for c in todos if c not in (focal, o_cod)), o_cod)
+            o_lat, o_lon = obter_ponto(df, o_cod)
+            d_lat, d_lon = obter_ponto(df, d_cod)
+            coords_orig, dist_orig = calcular_rota_simplificada(G_simp, o_cod, d_cod)
+            coords_alt, dist_alt = calcular_rota_simplificada(
+                G_simp, o_cod, d_cod, set(map(str, interdicao))
+            )
+    except Exception:
+        return None, "erro"
+
+    tem_alt = len(coords_alt) >= 2
+    tem_orig = len(coords_orig) >= 2
+    if not tem_orig and not tem_alt:
+        return None, "sem_rotas"
+
+    resultado = {
+        "timestamp": datetime.now(),
+        "oae_focal": str(focal),
+        "oae_focal_lat": float(oae_lat),
+        "oae_focal_lon": float(oae_lon),
+        "origem_lat": float(o_lat),
+        "origem_lon": float(o_lon),
+        "destino_lat": float(d_lat),
+        "destino_lon": float(d_lon),
+        "origem": f"({o_lat:.5f}, {o_lon:.5f})",
+        "destino": f"({d_lat:.5f}, {d_lon:.5f})",
+        "interdicao": [str(c) for c in interdicao],
+        "dist_orig_m": float(dist_orig),
+        "dist_alt_m": float(dist_alt) if tem_alt else 0.0,
+        "tem_alt": bool(tem_alt),
+        "modo": modo_usado,
+        "raio_km": (raio_usado_m / 1000.0) if raio_usado_m else None,
+    }
+    return resultado, "ok"
+
+
+# ============================================================================
+# Geração de combinações + estimadores para Simulação Geral (Monte Carlo)
+# ============================================================================
+
+def _estimar_combinacoes(n_outros: int, estrategia: str, profundidade: int, n_iter: int) -> int:
+    """Estima quantas combinações serão executadas (para mostrar no dialog)."""
+    if estrategia == "exaustiva":
+        return sum(math.comb(n_outros, k) for k in range(profundidade + 1))
+    if estrategia == "amostra":
+        return min(n_iter, 2 ** n_outros)
+    # hibrido: todas as duplas + triplas + amostra aleatória para tamanhos maiores
+    base = sum(math.comb(n_outros, k) for k in range(min(3, profundidade + 1)))
+    if profundidade >= 3:
+        return base + n_iter
+    return base
+
+
+def _gerar_combinacoes(
+    focal: str,
+    outros: list[str],
+    estrategia: str,
+    profundidade: int,
+    n_iter: int,
+) -> list[list[str]]:
+    """Gera lista de combinações de interdição (cada uma com a focal incluída)."""
+    import itertools
+    combos_set: set[frozenset] = set()
+    rng = random.Random(42)
+
+    if estrategia == "exaustiva":
+        for k in range(profundidade + 1):
+            for combo in itertools.combinations(outros, k):
+                combos_set.add(frozenset([focal] + list(combo)))
+
+    elif estrategia == "amostra":
+        max_tent = n_iter * 5
+        tent = 0
+        while len(combos_set) < n_iter and tent < max_tent:
+            k = rng.randint(0, min(profundidade, len(outros)))
+            sample = rng.sample(outros, k) if k > 0 else []
+            combos_set.add(frozenset([focal] + sample))
+            tent += 1
+
+    else:  # hibrido
+        for k in range(min(3, profundidade + 1)):
+            for combo in itertools.combinations(outros, k):
+                combos_set.add(frozenset([focal] + list(combo)))
+        if profundidade >= 3:
+            target = len(combos_set) + n_iter
+            max_tent = n_iter * 5
+            tent = 0
+            while len(combos_set) < target and tent < max_tent:
+                k = rng.randint(3, min(profundidade, len(outros)))
+                sample = rng.sample(outros, k)
+                combos_set.add(frozenset([focal] + sample))
+                tent += 1
+
+    # focal sempre primeiro, restante em ordem alfabética
+    return [
+        [focal] + sorted(c - {focal})
+        for c in combos_set
+    ]
+
+
+def executar_batch_simulacoes(
+    df: pd.DataFrame,
+    opcoes: dict,
+    config: dict,
+) -> tuple[int, int, list[dict]]:
+    """Roda batch de simulações com base na config. Retorna (n_ok, n_fail, resultados)."""
+    focal = config["focal"]
+    estrategia = config["estrategia"]
+    profundidade = config["profundidade"]
+    n_iter = config["n_iter"]
+    buffer_km = opcoes.get("buffer_km", 2)
+    modo_forcado = opcoes["modo_rede"].startswith("Forçar")
+
+    todos = df["Código OAE"].astype(str).tolist()
+    outros = [c for c in todos if c != focal]
+
+    combos = _gerar_combinacoes(focal, outros, estrategia, profundidade, n_iter)
+
+    if "simulacoes" not in st.session_state:
+        st.session_state["simulacoes"] = []
+
+    progress = st.progress(0.0, text=f"Iniciando batch de {len(combos)} cenários...")
+    n_ok = n_fail = 0
+    novos_resultados: list[dict] = []
+
+    for i, combo in enumerate(combos):
+        progress.progress(
+            i / len(combos),
+            text=f"({i+1}/{len(combos)}) cenário com {len(combo)} OAE(s) interditadas...",
+        )
+        resultado, _status = _simular_cenario_silencioso(
+            df, focal, combo, buffer_km=buffer_km, modo_forcado_simples=modo_forcado
+        )
+        if resultado is not None:
+            st.session_state["simulacoes"].append(resultado)
+            novos_resultados.append(resultado)
+            n_ok += 1
+            st.session_state["sim_count"] = st.session_state.get("sim_count", 0) + 1
+        else:
+            n_fail += 1
+
+    progress.progress(1.0, text=f"Concluído: {n_ok} OK · {n_fail} falhas")
+    progress.empty()
+    return n_ok, n_fail, novos_resultados
+
+
+# ============================================================================
+# Visualizações para o batch (histograma, heatmap, curva de degradação)
+# ============================================================================
+
+def _plot_histograma_impacto(simulacoes: list[dict]):
+    """Histograma do Impacto % das simulações."""
+    import matplotlib.pyplot as plt
+    impactos = [
+        (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100
+        for s in simulacoes
+        if s["tem_alt"] and s["dist_alt_m"] > 0
+    ]
+    if not impactos:
+        return None
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.hist(impactos, bins=20, color="#00E0D4", edgecolor="#0F1B33", alpha=0.85)
+    media = sum(impactos) / len(impactos)
+    ax.axvline(media, color="#E63946", linestyle="--", linewidth=2, label=f"Média: {media:.1f}%")
+    ax.set_xlabel("Impacto %")
+    ax.set_ylabel("Número de simulações")
+    ax.set_title(f"Distribuição do Impacto % ({len(impactos)} simulações com rota alternativa)")
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis="y")
+    fig.tight_layout()
+    return fig
+
+
+def _plot_curva_degradacao(simulacoes: list[dict]):
+    """Curva: impacto% em função do nº de OAEs interditadas."""
+    import matplotlib.pyplot as plt
+    from collections import defaultdict
+    grupos: dict[int, list[float]] = defaultdict(list)
+    for s in simulacoes:
+        if not s["tem_alt"] or s["dist_alt_m"] <= 0:
+            continue
+        k = len(s["interdicao"])
+        impacto = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100
+        grupos[k].append(impacto)
+    if not grupos:
+        return None
+
+    ks = sorted(grupos.keys())
+    media = [sum(grupos[k]) / len(grupos[k]) for k in ks]
+    maximo = [max(grupos[k]) for k in ks]
+    n_amostras = [len(grupos[k]) for k in ks]
+
+    fig, ax = plt.subplots(figsize=(9, 4.2))
+    ax.plot(ks, media, marker="o", label="Impacto médio", color="#00E0D4", linewidth=2.2, markersize=8)
+    ax.plot(ks, maximo, marker="^", label="Impacto máximo", color="#E63946", linewidth=2, markersize=7)
+    for k, m, n in zip(ks, media, n_amostras):
+        ax.annotate(f"n={n}", (k, m), textcoords="offset points", xytext=(0, -16),
+                    ha="center", fontsize=8, color="#6B7A99")
+    ax.set_xlabel("Nº de OAEs interditadas simultaneamente (inclui a focal)")
+    ax.set_ylabel("Impacto %")
+    ax.set_title("Curva de Degradação da Rede")
+    ax.set_xticks(ks)
+    ax.set_ylim(0, 105)
+    ax.legend(loc="lower right")
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
+def _plot_heatmap_oaes(simulacoes: list[dict], focal: str):
+    """Heatmap: linhas = outras OAEs, colunas = tamanho do cenário, cor = impacto médio."""
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from collections import defaultdict
+
+    contribs: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for s in simulacoes:
+        if not s["tem_alt"] or s["dist_alt_m"] <= 0:
+            continue
+        k = len(s["interdicao"])
+        impacto = (s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100
+        for oae in s["interdicao"]:
+            if oae == focal:
+                continue
+            contribs[oae][k].append(impacto)
+
+    if not contribs:
+        return None
+
+    oaes = sorted(contribs.keys(),
+                  key=lambda o: -sum(sum(v) / len(v) for v in contribs[o].values()) / len(contribs[o]))
+    ks = sorted({k for d in contribs.values() for k in d.keys()})
+
+    matriz = np.full((len(oaes), len(ks)), np.nan)
+    for i, oae in enumerate(oaes):
+        for j, k in enumerate(ks):
+            if k in contribs[oae]:
+                matriz[i, j] = sum(contribs[oae][k]) / len(contribs[oae][k])
+
+    fig, ax = plt.subplots(figsize=(9, max(3.5, len(oaes) * 0.45)))
+    im = ax.imshow(matriz, aspect="auto", cmap="YlOrRd", vmin=0, vmax=100)
+    ax.set_xticks(range(len(ks)))
+    ax.set_xticklabels([f"{k} OAEs" for k in ks])
+    ax.set_yticks(range(len(oaes)))
+    ax.set_yticklabels([(o[:32] + "…") if len(o) > 33 else o for o in oaes])
+    ax.set_xlabel("Tamanho do cenário (total de interdições, incluindo focal)")
+    ax.set_title(f"Heatmap: Impacto médio % quando cada OAE é co-interditada com {focal[:30]}")
+
+    for i in range(len(oaes)):
+        for j in range(len(ks)):
+            v = matriz[i, j]
+            if not np.isnan(v):
+                ax.text(j, i, f"{v:.0f}", ha="center", va="center",
+                        color="white" if v > 50 else "#0F1B33", fontsize=8, fontweight="bold")
+
+    plt.colorbar(im, ax=ax, label="Impacto médio %")
+    fig.tight_layout()
+    return fig
+
+
+# ============================================================================
+# Dialog de configuração do batch (Streamlit modal)
+# ============================================================================
+
+@st.dialog("🎲 Simulação Geral · Configurar batch", width="large")
+def dialog_batch_config(df: pd.DataFrame, focal: str):
+    todos = df["Código OAE"].astype(str).tolist()
+    n_outros = max(0, len(todos) - 1)
+
+    if n_outros < 1:
+        st.warning("A base precisa de pelo menos 2 OAEs para rodar o batch.")
+        return
+
+    st.markdown(f"**OAE focal (sempre interditada):** `{focal}`")
+    st.markdown(f"**OAEs co-candidatas no batch:** {n_outros}")
+    st.markdown("---")
+
+    profundidade = st.slider(
+        "Profundidade máxima — OAEs co-interditadas com a focal",
+        1, n_outros, min(4, n_outros),
+        help="Quantas OAEs (além da focal) podem entrar simultaneamente em uma simulação. "
+             "Profundidade 4 = a focal + até 4 outras = cenários de até 5 OAEs fechadas.",
+        key="batch_profundidade",
+    )
+    n_iter = st.slider(
+        "Iterações aleatórias — para modos Amostra/Híbrido",
+        10, 200, 30,
+        help="Quantos cenários aleatórios sortear (no modo Híbrido entram além das duplas/triplas exaustivas).",
+        key="batch_n_iter",
+    )
+
+    n_exaust = _estimar_combinacoes(n_outros, "exaustiva", profundidade, n_iter)
+    n_amos = _estimar_combinacoes(n_outros, "amostra", profundidade, n_iter)
+    n_hibr = _estimar_combinacoes(n_outros, "hibrido", profundidade, n_iter)
+
+    def _fmt_tempo(n: int) -> str:
+        # ~2.5s por iteração no Streamlit Cloud (com OSM cacheado)
+        seg = int(n * 2.5)
+        if seg < 60:
+            return f"~{seg}s"
+        return f"~{seg // 60} min {seg % 60}s"
+
+    opcoes_estrategia = [
+        ("exaustiva", "📊 Exaustiva",
+         f"{n_exaust} combinações ({_fmt_tempo(n_exaust)})",
+         "100% das combinações até a profundidade. Cobertura total."),
+        ("amostra", "🎲 Amostra aleatória",
+         f"{n_amos} combinações ({_fmt_tempo(n_amos)})",
+         "N cenários aleatórios variando o tamanho. Mais rápido, cobertura estatística."),
+        ("hibrido", "🔀 Híbrido (recomendado)",
+         f"{n_hibr} combinações ({_fmt_tempo(n_hibr)})",
+         "TODAS as duplas e triplas (cobertura essencial) + amostra aleatória para tamanhos maiores."),
+    ]
+    chave_estr = st.radio(
+        "Estratégia",
+        options=[op[0] for op in opcoes_estrategia],
+        format_func=lambda k: next(f"{nome} — {info}\n\n_{tip}_" for k_, nome, info, tip in opcoes_estrategia if k_ == k),
+        index=2,
+        key="batch_estrategia",
+    )
+
+    st.markdown("---")
+    col1, col2 = st.columns(2)
+    if col1.button("▶️ Iniciar batch", type="primary", use_container_width=True):
+        st.session_state["batch_config_pendente"] = {
+            "estrategia": chave_estr,
+            "profundidade": profundidade,
+            "n_iter": n_iter,
+            "focal": focal,
+        }
+        st.rerun()
+    if col2.button("Cancelar", use_container_width=True):
+        st.rerun()
 
 
 def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
@@ -2882,6 +3305,48 @@ def main() -> None:
     )
     cols_show = [c for c in COLUNAS_OBRIGATORIAS + COLUNAS_OPCIONAIS if c in df.columns]
     st.dataframe(df[cols_show], use_container_width=True, hide_index=True, height=300)
+
+    # ----- Batch (Simulação Geral) - roda ANTES da seção de simulação normal -----
+    cfg_batch = st.session_state.pop("batch_config_pendente", None)
+    if cfg_batch:
+        st.markdown("---")
+        st.markdown("## 🎲 Simulação Geral em andamento")
+        st.caption(
+            f"OAE focal: **{cfg_batch['focal']}** · "
+            f"Estratégia: **{cfg_batch['estrategia']}** · "
+            f"Profundidade max: **{cfg_batch['profundidade']}** · "
+            f"Iterações (amostra/hibrido): **{cfg_batch['n_iter']}**"
+        )
+        n_ok, n_fail, novos = executar_batch_simulacoes(df, opcoes, cfg_batch)
+        if n_ok > 0:
+            st.success(f"✅ Batch concluído — **{n_ok}** simulações OK · {n_fail} sem rota viável.")
+            st.markdown("### 📊 Análise do batch")
+
+            fig_hist = _plot_histograma_impacto(novos)
+            if fig_hist is not None:
+                st.markdown("**Histograma do Impacto %**")
+                st.pyplot(fig_hist, use_container_width=True)
+
+            fig_curva = _plot_curva_degradacao(novos)
+            if fig_curva is not None:
+                st.markdown("**Curva de degradação da rede**")
+                st.pyplot(fig_curva, use_container_width=True)
+
+            fig_heat = _plot_heatmap_oaes(novos, cfg_batch["focal"])
+            if fig_heat is not None:
+                st.markdown("**Heatmap: contribuição de cada OAE co-interditada**")
+                st.pyplot(fig_heat, use_container_width=True)
+
+            st.info(
+                "💡 Todas estas simulações foram adicionadas ao **histórico** abaixo. "
+                "O ranking MLP/Heurística e o **PDF** já refletem os novos cenários — "
+                "role para baixo para baixar o relatório completo."
+            )
+        else:
+            st.error(
+                f"❌ Nenhuma das {n_fail} simulações conseguiu calcular uma rota alternativa. "
+                "Tente aumentar o **Buffer (km)** na sidebar ou escolher outra OAE focal."
+            )
 
     # Simulação
     st.markdown("---")
