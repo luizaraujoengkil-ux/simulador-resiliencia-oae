@@ -2017,8 +2017,12 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
 
             # ----- Etapa 2: rotas -----
             if G_osm is not None:
-                st.write(f"• Derivando OD a partir da OAE focal **{oae_focal}** (faixa 30 m – 3 km)...")
-                resultado_od = _auto_od_da_oae(G_osm, oae_lat, oae_lon, raio_min_m=30.0, raio_max_m=3000.0)
+                # raio_min_m=200 garante que o OD fique FORA da zona de bloqueio
+                # (cada OAE remove ~100m), mesmo quando há várias interditadas próximas.
+                # Resultado: rotas alternativas seguem caminhos mais naturais (ex: usar
+                # uma ponte vizinha em vez de fazer detour gigante).
+                st.write(f"• Derivando OD a partir da OAE focal **{oae_focal}** (faixa 200 m – 5 km)...")
+                resultado_od = _auto_od_da_oae(G_osm, oae_lat, oae_lon, raio_min_m=200.0, raio_max_m=5000.0)
                 if resultado_od[0] is None:
                     # Falhou — mostra diagnóstico detalhado
                     diag = resultado_od[1]
@@ -2358,7 +2362,7 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
 
         ranked = sorted(impactos.items(), key=lambda x: -sum(x[1]) / len(x[1]))
         rank_headers = ["Posição", "Código OAE", "Aparições", "Var. média (%)", "Var. máxima (%)"]
-        rank_widths  = [22,         32,           24,           36,                36]
+        rank_widths  = [16,         60,           18,           28,                28]
         pdf.set_font("Helvetica", "B", 9)
         pdf.set_fill_color(220, 230, 240)
         for h, w in zip(rank_headers, rank_widths):
@@ -2422,6 +2426,15 @@ def gerar_pdf_relatorio(df: pd.DataFrame, simulacoes: list[dict]) -> bytes:
         "distância nos cenários em que a OAE foi interditada - indicador relativo "
         "de impacto local."
     ))
+    pdf.ln(0.8)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.multi_cell(0, 3.8, _txt(
+        "Nota sobre interdições múltiplas: quando uma simulação interdita N OAEs "
+        "simultaneamente, o aumento de distância observado é atribuído a TODAS elas "
+        "(divisão de crédito). Para ranqueamento puro de criticidade individual, "
+        "rode uma simulação por OAE (uma interdição por vez)."
+    ))
+    pdf.set_font("Helvetica", "", 8.5)
 
     # ----- Rodapé (posicionado relativo ao conteúdo, não fixo no fim da página) -----
     pdf.ln(3)
