@@ -10,6 +10,9 @@ osmnx>=1.9
 geopandas>=0.14
 fpdf2>=2.7
 geopy>=2.4
+matplotlib>=3.7
 # scikit-learn removido: incompativel com Python 3.14.5 do Streamlit Cloud
 # (segfault no import). O codigo cai automaticamente para o modelo heuristico
 # analitico equivalente (_heuristica_prioridade) com a mesma formula 60/40+sigmoide.
+# matplotlib necessario para os graficos do batch (histograma, heatmap, curva).
+# osmnx 2.x tornou matplotlib opcional, entao precisamos declarar explicitamente.

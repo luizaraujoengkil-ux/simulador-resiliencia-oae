@@ -2193,6 +2193,8 @@ def executar_batch_simulacoes(
     if "simulacoes" not in st.session_state:
         st.session_state["simulacoes"] = []
 
+    import gc
+
     progress = st.progress(0.0, text=f"Iniciando batch de {len(combos)} cenários...")
     n_ok = n_fail = 0
     novos_resultados: list[dict] = []
@@ -2202,9 +2204,12 @@ def executar_batch_simulacoes(
             i / len(combos),
             text=f"({i+1}/{len(combos)}) cenário com {len(combo)} OAE(s) interditadas...",
         )
-        resultado, _status = _simular_cenario_silencioso(
-            df, focal, combo, buffer_km=buffer_km, modo_forcado_simples=modo_forcado
-        )
+        try:
+            resultado, _status = _simular_cenario_silencioso(
+                df, focal, combo, buffer_km=buffer_km, modo_forcado_simples=modo_forcado
+            )
+        except Exception:
+            resultado = None
         if resultado is not None:
             st.session_state["simulacoes"].append(resultado)
             novos_resultados.append(resultado)
@@ -2212,9 +2217,13 @@ def executar_batch_simulacoes(
             st.session_state["sim_count"] = st.session_state.get("sim_count", 0) + 1
         else:
             n_fail += 1
+        # Libera memória a cada 5 iterações (cópias do grafo OSM são pesadas)
+        if (i + 1) % 5 == 0:
+            gc.collect()
 
     progress.progress(1.0, text=f"Concluído: {n_ok} OK · {n_fail} falhas")
     progress.empty()
+    gc.collect()
     return n_ok, n_fail, novos_resultados
 
 
@@ -3322,20 +3331,30 @@ def main() -> None:
             st.success(f"✅ Batch concluído — **{n_ok}** simulações OK · {n_fail} sem rota viável.")
             st.markdown("### 📊 Análise do batch")
 
-            fig_hist = _plot_histograma_impacto(novos)
-            if fig_hist is not None:
-                st.markdown("**Histograma do Impacto %**")
-                st.pyplot(fig_hist, use_container_width=True)
+            # Plots envolvidos em try/except — se matplotlib falhar, batch continua válido
+            try:
+                fig_hist = _plot_histograma_impacto(novos)
+                if fig_hist is not None:
+                    st.markdown("**Histograma do Impacto %**")
+                    st.pyplot(fig_hist, use_container_width=True)
+            except Exception as exc:
+                st.warning(f"⚠️ Não foi possível gerar o histograma: {exc}")
 
-            fig_curva = _plot_curva_degradacao(novos)
-            if fig_curva is not None:
-                st.markdown("**Curva de degradação da rede**")
-                st.pyplot(fig_curva, use_container_width=True)
+            try:
+                fig_curva = _plot_curva_degradacao(novos)
+                if fig_curva is not None:
+                    st.markdown("**Curva de degradação da rede**")
+                    st.pyplot(fig_curva, use_container_width=True)
+            except Exception as exc:
+                st.warning(f"⚠️ Não foi possível gerar a curva de degradação: {exc}")
 
-            fig_heat = _plot_heatmap_oaes(novos, cfg_batch["focal"])
-            if fig_heat is not None:
-                st.markdown("**Heatmap: contribuição de cada OAE co-interditada**")
-                st.pyplot(fig_heat, use_container_width=True)
+            try:
+                fig_heat = _plot_heatmap_oaes(novos, cfg_batch["focal"])
+                if fig_heat is not None:
+                    st.markdown("**Heatmap: contribuição de cada OAE co-interditada**")
+                    st.pyplot(fig_heat, use_container_width=True)
+            except Exception as exc:
+                st.warning(f"⚠️ Não foi possível gerar o heatmap: {exc}")
 
             st.info(
                 "💡 Todas estas simulações foram adicionadas ao **histórico** abaixo. "
