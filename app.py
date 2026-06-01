@@ -1781,10 +1781,11 @@ def sidebar_inputs(df: pd.DataFrame) -> dict:
     )
     buffer_km = st.sidebar.slider(
         "Buffer (km) ao redor da área de interesse",
-        1, 10, value=2,
+        1, 20, value=2,
         help="No mapa geral o raio é calculado a partir do centroide das OAEs interditadas. "
              "Na simulação inclui também origem + destino. Este buffer adiciona contexto "
-             "ao redor (recomendado: 2-5 km).",
+             "ao redor (recomendado: 2-5 km; acima de ~10 km a rede OSM fica grande e o "
+             "download/cálculo demora mais).",
     )
     st.sidebar.markdown(
         """
@@ -2947,8 +2948,96 @@ def _plot_mapa_criticidade(df: pd.DataFrame, simulacoes: list[dict]):
     return fig
 
 
+def _lonlat_to_merc(lon: float, lat: float) -> tuple[float, float]:
+    """Converte (lon, lat) em graus para Web Mercator (EPSG:3857), em metros."""
+    R = 6378137.0
+    lat = max(-85.05, min(85.05, lat))
+    x = R * math.radians(lon)
+    y = R * math.log(math.tan(math.pi / 4.0 + math.radians(lat) / 2.0))
+    return x, y
+
+
+def _basemap_mosaico(lon_min, lat_min, lon_max, lat_max, max_tiles: int = 16):
+    """Baixa e costura tiles de mapa (CARTO 'light', sem chave) cobrindo a bbox.
+
+    Retorna (PIL.Image RGB, (left, right, bottom, top) em Web Mercator) ou None
+    em caso de falha (sem internet, rate-limit etc.). Best-effort: nunca levanta
+    exceção — o chamador cai para a malha cinza offline.
+    """
+    import io as _io
+    try:
+        import requests
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        R = 6378137.0
+        world = 2.0 * math.pi * R
+
+        def deg2tile(lat, lon, z):
+            n = 2 ** z
+            xt = (lon + 180.0) / 360.0 * n
+            yt = (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n
+            return xt, yt
+
+        zoom = 3
+        for z in range(17, 3, -1):
+            nx = abs(int(deg2tile(lat_min, lon_max, z)[0]) - int(deg2tile(lat_min, lon_min, z)[0])) + 1
+            ny = abs(int(deg2tile(lat_min, lon_min, z)[1]) - int(deg2tile(lat_max, lon_min, z)[1])) + 1
+            if nx * ny <= max_tiles:
+                zoom = z
+                break
+
+        n = 2 ** zoom
+        xmin = int(deg2tile(lat_min, lon_min, zoom)[0])
+        xmax = int(deg2tile(lat_min, lon_max, zoom)[0])
+        ymin = int(deg2tile(lat_max, lon_min, zoom)[1])
+        ymax = int(deg2tile(lat_min, lon_min, zoom)[1])
+        xmin, xmax = max(0, min(xmin, xmax)), min(n - 1, max(xmin, xmax))
+        ymin, ymax = max(0, min(ymin, ymax)), min(n - 1, max(ymin, ymax))
+        if (xmax - xmin + 1) * (ymax - ymin + 1) > max_tiles:
+            return None
+
+        tile_px = 256
+        mosaic = Image.new("RGB", ((xmax - xmin + 1) * tile_px, (ymax - ymin + 1) * tile_px), "#EAEAEA")
+        headers = {"User-Agent": "OAE-SIM/0.1 (+github.com/luizaraujoengkil-ux/simulador-resiliencia-oae)"}
+        sub = "abc"
+        for ix, X in enumerate(range(xmin, xmax + 1)):
+            for iy, Y in enumerate(range(ymin, ymax + 1)):
+                url = f"https://{sub[(X + Y) % 3]}.basemaps.cartocdn.com/light_all/{zoom}/{X}/{Y}.png"
+                resp = requests.get(url, headers=headers, timeout=6)
+                if resp.status_code != 200:
+                    return None
+                tile = Image.open(_io.BytesIO(resp.content)).convert("RGB")
+                mosaic.paste(tile, (ix * tile_px, iy * tile_px))
+
+        size = world / n
+        left = -math.pi * R + xmin * size
+        right = -math.pi * R + (xmax + 1) * size
+        top = math.pi * R - ymin * size
+        bottom = math.pi * R - (ymax + 1) * size
+        return mosaic, (left, right, bottom, top)
+    except Exception:
+        return None
+
+
+def _desenhar_basemap(ax, lon_min, lat_min, lon_max, lat_max) -> bool:
+    """Desenha um basemap real (tiles) no eixo, em Web Mercator. True se OK."""
+    import numpy as np
+    res = _basemap_mosaico(lon_min, lat_min, lon_max, lat_max)
+    if res is None:
+        return False
+    mosaic, (left, right, bottom, top) = res
+    try:
+        ax.imshow(np.asarray(mosaic), extent=[left, right, bottom, top],
+                  origin="upper", zorder=0, interpolation="bilinear")
+        return True
+    except Exception:
+        return False
+
+
 def _plot_mapa_rotas(df: pd.DataFrame, s: dict):
-    """Mapa estático (offline) da rota original × alternativa de um cenário.
+    """Mapa da rota original × alternativa de um cenário, com fundo de rua real.
 
     Recalcula as rotas a partir do O/D já gravado no resultado, usando o grafo
     OSM em cache (não guarda coordenadas -> não pesa na memória). Só vale para
@@ -2984,65 +3073,83 @@ def _plot_mapa_rotas(df: pd.DataFrame, s: dict):
     import matplotlib.pyplot as plt
     from matplotlib.collections import LineCollection
 
-    fig, ax = plt.subplots(figsize=(8, 7))
+    M = _lonlat_to_merc
 
-    # Malha viária ao fundo (cinza) via LineCollection (rápido p/ muitos arcos)
-    segs = []
-    for u, v, data in G.edges(data=True):
-        geom = data.get("geometry")
-        if geom is not None:
-            try:
-                xs, ys = geom.xy
-                segs.append(list(zip(xs, ys)))
-                continue
-            except Exception:
-                pass
-        try:
-            segs.append([(G.nodes[u]["x"], G.nodes[u]["y"]),
-                         (G.nodes[v]["x"], G.nodes[v]["y"])])
-        except KeyError:
-            continue
-    if segs:
-        ax.add_collection(LineCollection(segs, colors="#C8D2E6",
-                                         linewidths=0.4, alpha=0.6, zorder=1))
-
-    if len(coords_orig) >= 2:
-        ax.plot([c[1] for c in coords_orig], [c[0] for c in coords_orig],
-                color="#1976D2", linewidth=2.6, label="Rota original", zorder=3)
-    if len(coords_alt) >= 2:
-        ax.plot([c[1] for c in coords_alt], [c[0] for c in coords_alt],
-                color="#E63946", linewidth=2.6, linestyle="--",
-                label="Rota alternativa", zorder=4)
-
-    int_lons, int_lats = [], []
+    # bbox (lon/lat) das rotas + O/D + interditadas, com margem
+    pts = [(c[1], c[0]) for c in coords_orig] + [(c[1], c[0]) for c in coords_alt]
+    pts += [(o[1], o[0]), (d[1], d[0])]
+    int_pts = []
     for cod in interdicao:
         try:
             lat, lon = obter_ponto(df, cod)
         except (KeyError, IndexError):
             continue
-        int_lons.append(lon); int_lats.append(lat)
-    if int_lons:
-        ax.scatter(int_lons, int_lats, marker="X", s=130, c="#D00000",
-                   edgecolors="white", linewidths=1.2, label="OAE interditada", zorder=6)
+        int_pts.append((lon, lat)); pts.append((lon, lat))
+    lons = [p[0] for p in pts]; lats = [p[1] for p in pts]
+    mlon = (max(lons) - min(lons)) * 0.12 + 0.002
+    mlat = (max(lats) - min(lats)) * 0.12 + 0.002
+    lon_min, lon_max = min(lons) - mlon, max(lons) + mlon
+    lat_min, lat_max = min(lats) - mlat, max(lats) + mlat
 
-    ax.scatter([o[1]], [o[0]], marker="o", s=90, c="#2A9D8F",
-               edgecolors="white", linewidths=1.2, label="Origem", zorder=6)
-    ax.scatter([d[1]], [d[0]], marker="s", s=90, c="#6A4C93",
-               edgecolors="white", linewidths=1.2, label="Destino", zorder=6)
+    fig, ax = plt.subplots(figsize=(8, 7))
+    usou_basemap = _desenhar_basemap(ax, lon_min, lat_min, lon_max, lat_max)
 
-    ax.autoscale()
-    try:
-        ax.set_aspect(1.0 / max(0.2, math.cos(math.radians(centro_lat))))
-    except Exception:
-        pass
+    if not usou_basemap:
+        # fallback offline: malha viária em cinza (Web Mercator)
+        segs = []
+        for u, v, data in G.edges(data=True):
+            geom = data.get("geometry")
+            if geom is not None:
+                try:
+                    xs, ys = geom.xy
+                    segs.append([M(x, y) for x, y in zip(xs, ys)]); continue
+                except Exception:
+                    pass
+            try:
+                segs.append([M(G.nodes[u]["x"], G.nodes[u]["y"]),
+                             M(G.nodes[v]["x"], G.nodes[v]["y"])])
+            except KeyError:
+                continue
+        if segs:
+            ax.add_collection(LineCollection(segs, colors="#9AA7BD",
+                                             linewidths=0.4, alpha=0.6, zorder=1))
+
+    if len(coords_orig) >= 2:
+        xy = [M(c[1], c[0]) for c in coords_orig]
+        ax.plot([p[0] for p in xy], [p[1] for p in xy], color="#1565C0",
+                linewidth=3.0, solid_capstyle="round", label="Rota original", zorder=3)
+    if len(coords_alt) >= 2:
+        xy = [M(c[1], c[0]) for c in coords_alt]
+        ax.plot([p[0] for p in xy], [p[1] for p in xy], color="#E63946",
+                linewidth=3.0, linestyle="--", solid_capstyle="round",
+                label="Rota alternativa", zorder=4)
+
+    if int_pts:
+        ixy = [M(lon, lat) for lon, lat in int_pts]
+        ax.scatter([p[0] for p in ixy], [p[1] for p in ixy], marker="X", s=150,
+                   c="#D00000", edgecolors="white", linewidths=1.4,
+                   label="OAE interditada", zorder=6)
+    ox_, oy_ = M(o[1], o[0]); dx_, dy_ = M(d[1], d[0])
+    ax.scatter([ox_], [oy_], marker="o", s=100, c="#2A9D8F", edgecolors="white",
+               linewidths=1.4, label="Origem", zorder=6)
+    ax.scatter([dx_], [dy_], marker="s", s=100, c="#6A4C93", edgecolors="white",
+               linewidths=1.4, label="Destino", zorder=6)
+
+    x0, y0 = M(lon_min, lat_min); x1, y1 = M(lon_max, lat_max)
+    ax.set_xlim(x0, x1); ax.set_ylim(y0, y1)
+    ax.set_aspect("equal")
+    ax.set_axis_off()
     dist_orig = s.get("dist_orig_m", 0) / 1000.0
     dist_alt = s.get("dist_alt_m", 0) / 1000.0
     impacto = ((s["dist_alt_m"] - s["dist_orig_m"]) / s["dist_alt_m"] * 100.0) if s.get("dist_alt_m") else 0.0
     foc = str(s.get("oae_focal", "-"))[:40]
     ax.set_title(f"Rotas · {foc}\norig {dist_orig:.2f} km → alt {dist_alt:.2f} km (impacto {impacto:.0f}%)",
                  fontsize=10)
-    ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
-    ax.legend(loc="best", fontsize=8)
+    ax.legend(loc="best", fontsize=8, framealpha=0.9)
+    if usou_basemap:
+        ax.text(0.99, 0.01, "© OpenStreetMap · © CARTO", transform=ax.transAxes,
+                ha="right", va="bottom", fontsize=6, color="#444",
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.75))
     fig.tight_layout()
     return fig
 
