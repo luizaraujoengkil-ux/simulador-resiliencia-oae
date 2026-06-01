@@ -1477,7 +1477,7 @@ def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return 2 * R * math.asin(math.sqrt(a))
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(max_entries=12, show_spinner=False)
 def construir_grafo_osm(centro_lat: float, centro_lon: float, raio_m: int) -> "nx.MultiDiGraph | None":
     """Baixa rede viária via OSMnx. Retorna None se falhar (sem internet etc.)."""
     try:
@@ -1493,6 +1493,22 @@ def construir_grafo_osm(centro_lat: float, centro_lon: float, raio_m: int) -> "n
         return G
     except Exception:
         return None
+
+
+def grafo_osm_estavel(centro_lat: float, centro_lon: float, raio_m: float) -> "nx.MultiDiGraph | None":
+    """Reaproveita o grafo OSM do cache arredondando centro/raio para 'caixas'.
+
+    Sem isso, cada simulação produz um centro/raio em float ligeiramente
+    diferente -> o `st.cache_resource` nunca acerta -> o OpenStreetMap é baixado
+    de novo a cada cenário (lento e sujeito a throttling do Overpass, o que trava
+    o app depois de algumas iterações). Aqui arredondamos o centro para ~110 m e
+    o raio para caixas de 500 m, de modo que cenários próximos reutilizem o mesmo
+    grafo já em cache.
+    """
+    lat_q = round(float(centro_lat), 3)
+    lon_q = round(float(centro_lon), 3)
+    raio_q = int(math.ceil(float(raio_m) / 500.0) * 500)
+    return construir_grafo_osm(lat_q, lon_q, raio_q)
 
 
 def _no_mais_proximo(G: nx.MultiDiGraph, lat: float, lon: float) -> int | None:
@@ -2008,6 +2024,8 @@ def _simular_cenario_silencioso(
     interdicao: list[str],
     buffer_km: float = 2.0,
     modo_forcado_simples: bool = False,
+    grafo_osm: "nx.MultiDiGraph | None" = None,
+    raio_osm_m: float | None = None,
 ) -> tuple[dict | None, str]:
     """Roda 1 simulação SEM renderizar nada. Retorna (resultado_dict, status_msg).
 
@@ -2037,12 +2055,17 @@ def _simular_cenario_silencioso(
     o_lon = d_lon = oae_lon
 
     try:
-        if not modo_forcado_simples:
+        if grafo_osm is not None and not modo_forcado_simples:
+            # Batch: reutiliza um único grafo já baixado (1 download por batch,
+            # não 1 por cenário) — é isso que impede o app de travar.
+            G_osm = grafo_osm
+            raio_usado_m = raio_osm_m
+        elif not modo_forcado_simples:
             area = _area_de_interesse(df, interdicao, None, None, buffer_km)
             if area is not None:
                 centro_lat, centro_lon, raio_m = area
                 raio_usado_m = raio_m
-                G_osm = construir_grafo_osm(centro_lat, centro_lon, raio_m)
+                G_osm = grafo_osm_estavel(centro_lat, centro_lon, raio_m)
 
         if G_osm is not None:
             od = _auto_od_da_oae(G_osm, oae_lat, oae_lon, raio_min_m=200, raio_max_m=5000)
@@ -2195,6 +2218,33 @@ def executar_batch_simulacoes(
 
     import gc
 
+    # Baixa UM ÚNICO grafo OSM para todo o batch, cobrindo a OAE focal e as
+    # co-candidatas próximas (raio limitado). Reutilizado em todos os cenários
+    # -> 1 download por batch em vez de 1 por iteração. Essa era a causa do
+    # travamento depois de N iterações (re-download + throttling do Overpass).
+    G_batch = None
+    raio_batch_m = None
+    if not modo_forcado:
+        try:
+            foc_lat, foc_lon = obter_ponto(df, focal)
+            RAIO_MAX_BATCH_M = 8000.0
+            dist_max = 0.0
+            for c in outros:
+                try:
+                    clat, clon = obter_ponto(df, c)
+                except (KeyError, IndexError):
+                    continue
+                d = _haversine_m(foc_lat, foc_lon, clat, clon)
+                if d <= RAIO_MAX_BATCH_M:
+                    dist_max = max(dist_max, d)
+            raio_batch_m = min(
+                max(dist_max, 3000.0) + buffer_km * 1000.0,
+                RAIO_MAX_BATCH_M + buffer_km * 1000.0,
+            )
+            G_batch = grafo_osm_estavel(foc_lat, foc_lon, raio_batch_m)
+        except (KeyError, IndexError):
+            G_batch = None
+
     progress = st.progress(0.0, text=f"Iniciando batch de {len(combos)} cenários...")
     n_ok = n_fail = 0
     novos_resultados: list[dict] = []
@@ -2206,7 +2256,9 @@ def executar_batch_simulacoes(
         )
         try:
             resultado, _status = _simular_cenario_silencioso(
-                df, focal, combo, buffer_km=buffer_km, modo_forcado_simples=modo_forcado
+                df, focal, combo, buffer_km=buffer_km,
+                modo_forcado_simples=modo_forcado,
+                grafo_osm=G_batch, raio_osm_m=raio_batch_m,
             )
         except Exception:
             resultado = None
@@ -2468,7 +2520,7 @@ def executar_simulacao(df: pd.DataFrame, opcoes: dict) -> dict | None:
                         f"{opcoes.get('buffer_km', 2)} km)."
                     )
                     st.write("• Baixando rede viária do OpenStreetMap...")
-                    G_osm = construir_grafo_osm(centro_lat, centro_lon, raio_m)
+                    G_osm = grafo_osm_estavel(centro_lat, centro_lon, raio_m)
                     if G_osm is not None:
                         st.write(f"  ✓ Rede OSM carregada ({G_osm.number_of_nodes()} nós, {G_osm.number_of_edges()} vias).")
                     else:
@@ -3540,24 +3592,36 @@ def main() -> None:
             )
 
         col_dl, col_clear = st.columns([3, 1])
-        try:
-            pdf_bytes = gerar_pdf_relatorio(df, simulacoes)
+        # PDF gerado SOB DEMANDA: antes era reconstruído a cada rerun, deixando a
+        # sessão cada vez mais lenta conforme o histórico crescia.
+        if col_dl.button(
+            "📄 Gerar relatório completo em PDF",
+            use_container_width=True,
+            type="primary",
+            help="Gera um PDF com resumo executivo, detalhamento de todas as simulações, "
+                 "ranking de OAEs mais críticas e metodologia.",
+            key="btn_gerar_pdf",
+        ):
+            try:
+                with st.spinner("Gerando PDF..."):
+                    st.session_state["pdf_bytes"] = gerar_pdf_relatorio(df, simulacoes)
+            except Exception as exc:
+                st.session_state.pop("pdf_bytes", None)
+                st.error(f"Erro ao gerar PDF: {exc}")
+        if st.session_state.get("pdf_bytes"):
             col_dl.download_button(
-                "📄 Baixar relatório completo em PDF",
-                data=pdf_bytes,
+                "⬇️ Baixar PDF gerado",
+                data=st.session_state["pdf_bytes"],
                 file_name=f"relatorio_oae_{datetime.now():%Y%m%d_%H%M%S}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
-                type="primary",
-                help="Gera um PDF com resumo executivo, detalhamento de todas as simulações, "
-                     "ranking de OAEs mais críticas e metodologia.",
+                key="dl_pdf",
             )
-        except Exception as exc:
-            col_dl.error(f"Erro ao gerar PDF: {exc}")
 
         if col_clear.button("🧹 Limpar histórico", use_container_width=True, key="btn_clear_hist"):
             st.session_state["simulacoes"] = []
             st.session_state["sim_count"] = 0
+            st.session_state.pop("pdf_bytes", None)
             st.rerun()
 
         # ----- Remover simulações específicas (sem rota, individuais) -----
@@ -3574,6 +3638,7 @@ def main() -> None:
         ):
             st.session_state["simulacoes"] = [s for s in simulacoes if s["tem_alt"]]
             st.session_state["sim_count"] = len(st.session_state["simulacoes"])
+            st.session_state.pop("pdf_bytes", None)
             st.rerun()
 
         opcoes_remover = [
@@ -3598,6 +3663,7 @@ def main() -> None:
             idx = opcoes_remover.index(sim_a_remover)
             del st.session_state["simulacoes"][idx]
             st.session_state["sim_count"] = len(st.session_state["simulacoes"])
+            st.session_state.pop("pdf_bytes", None)
             st.rerun()
 
     # ----- Rodapé com autor e licença -----
